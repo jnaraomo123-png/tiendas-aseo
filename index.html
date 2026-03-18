@@ -57,11 +57,12 @@ async function agregarDoc(col, data) {
 //  ESTADO LOCAL (cache en memoria)
 // ══════════════════════════════════════════
 let S = {
-  productos:[], ventas:[], fiados:[],
-  carrito:[], pagoTipo:'efectivo',
-  config:{nombre:'Mi Tienda',telefono:'',direccion:'',mensaje:'¡Gracias por su compra!'},
+  productos:[], ventas:[], fiados:[], pedidos:[],
+  carrito:[], carritoP:[], pagoTipo:'efectivo',
+  config:{nombre:'Mi Tienda',telefono:'',direccion:'',mensaje:'¡Gracias por su compra!',
+    vendedores:[]},
   editProd:null, cobrandoId:null, granelProdId:null, granelMode:'valor',
-  _ventaPendiente:null,
+  _ventaPendiente:null, rol:'dueno',
 };
 
 // ══════════════════════════════════════════
@@ -70,16 +71,39 @@ let S = {
 async function cargarDatos() {
   mostrarCargando(true);
   try {
-    const [prods, ventas, fiados, cfgSnap] = await Promise.all([
+    const [prods, ventas, fiados, pedidos, cfgSnap] = await Promise.all([
       leerCol('productos'), leerCol('ventas'), leerCol('fiados'),
-      getDoc(cfgDoc())
+      leerCol('pedidos'), getDoc(cfgDoc())
     ]);
     S.productos = prods;
     S.ventas    = ventas;
     S.fiados    = fiados;
+    S.pedidos   = pedidos;
     if (cfgSnap.exists()) S.config = { ...S.config, ...cfgSnap.data() };
+    // Determinar rol del usuario
+    const email = auth.currentUser?.email||'';
+    const vendedores = S.config.vendedores||[];
+    S.rol = vendedores.includes(email) ? 'vendedor' : 'dueno';
+    aplicarRol();
   } catch(e) { toast('Error cargando datos: '+e.message, false); }
   mostrarCargando(false);
+}
+
+function aplicarRol() {
+  const esVendedor = S.rol === 'vendedor';
+  // Ocultar secciones según rol
+  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-reporte','nav-config'];
+  solodueno.forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.style.display = esVendedor ? 'none' : 'flex';
+  });
+  // Vendedor solo ve: Dashboard, Inventario (solo lectura), Pedidos
+  document.getElementById('nav-pedidos').style.display = 'flex';
+  // Inventario: ocultar botón agregar si es vendedor
+  const btnAgregar = document.getElementById('btn-agregar-prod');
+  if(btnAgregar) btnAgregar.style.display = esVendedor ? 'none' : 'inline-flex';
+  // Ir a pedidos si es vendedor
+  if(esVendedor) goTo('pedidos');
 }
 
 function mostrarCargando(v) {
@@ -141,6 +165,7 @@ window.goTo = function(p) {
   if(p==='caja') { document.getElementById('caja-fecha').value=hoy(); renderCierre(); }
   if(p==='reporte') initReporte();
   if(p==='config') renderConfig();
+  if(p==='pedidos') renderPedidos();
 };
 
 // ══════════════════════════════════════════
@@ -859,10 +884,18 @@ window.exportarExcel = function() {
 //  CONFIG NEGOCIO
 // ══════════════════════════════════════════
 function renderConfig(){
+  if(!S.config.vendedores) S.config.vendedores=[];
   document.getElementById('cfg-nombre-i').value=S.config.nombre||'';
   document.getElementById('cfg-tel-i').value=S.config.telefono||'';
   document.getElementById('cfg-dir-i').value=S.config.direccion||'';
   document.getElementById('cfg-msg-i').value=S.config.mensaje||'¡Gracias por su compra!';
+  document.getElementById('vendedores-lista').innerHTML=S.config.vendedores.length
+    ? S.config.vendedores.map(v=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span>🚚 ${v}</span>
+          <button class="btn bsm bd" onclick="eliminarVendedor('${v}')">Quitar</button>
+        </div>`).join('')
+    : '<div style="font-size:12px;color:var(--t3);padding:6px 0">Sin vendedores registrados</div>';
 }
 window.renderConfig=renderConfig;
 
@@ -876,8 +909,260 @@ window.guardarConfig = async function() {
   toast('Configuración guardada');
 };
 
-// close dropdown on outside click
-document.addEventListener('click',e=>{if(!e.target.closest('.pos-wrap'))document.getElementById('v-results').style.display='none';});
+window.agregarVendedor = async function() {
+  const email=document.getElementById('nuevo-vendedor').value.trim().toLowerCase();
+  if(!email||!email.includes('@')){toast('Ingresa un correo válido',false);return;}
+  if(!S.config.vendedores) S.config.vendedores=[];
+  if(S.config.vendedores.includes(email)){toast('Ese vendedor ya está registrado',false);return;}
+  S.config.vendedores.push(email);
+  await setDoc(cfgDoc(),{vendedores:S.config.vendedores},{merge:true});
+  document.getElementById('nuevo-vendedor').value='';
+  renderConfig(); toast('Vendedor agregado: '+email);
+};
+
+window.eliminarVendedor = async function(email) {
+  S.config.vendedores=S.config.vendedores.filter(v=>v!==email);
+  await setDoc(cfgDoc(),{vendedores:S.config.vendedores},{merge:true});
+  renderConfig(); toast('Vendedor eliminado');
+};
+
+// ══════════════════════════════════════════
+//  PEDIDOS
+// ══════════════════════════════════════════
+let pedidoCarrito=[], pedidoEditId=null, pedidoFiltro='todos';
+
+function renderPedidos(){
+  const email=auth.currentUser?.email||'';
+  const esVend=S.rol==='vendedor';
+  document.getElementById('pedidos-sub').textContent=esVend
+    ?'Tus pedidos · '+email:'Todos los pedidos del negocio';
+  const pend=S.pedidos.filter(p=>p.estado==='pendiente');
+  const entr=S.pedidos.filter(p=>p.estado==='entregado'&&p.fechaEntrega===hoy());
+  const totPend=pend.reduce((a,p)=>a+p.total,0);
+  // Pedidos entregados hoy SÍ cuentan en el dinero del día
+  const totEntrHoy=entr.reduce((a,p)=>a+p.total,0);
+  document.getElementById('pedidos-stats').innerHTML=`
+    <div class="sc"><div class="sc-label">Pendientes de entrega</div><div class="sc-val o">${pend.length}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${fmt(totPend)} — no cuentan aún</div></div>
+    <div class="sc"><div class="sc-label">Entregados hoy</div><div class="sc-val g">${entr.length}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${fmt(totEntrHoy)} — ya cuentan</div></div>`;
+  let lista=pedidoFiltro==='todos'?S.pedidos:S.pedidos.filter(p=>p.estado===pedidoFiltro);
+  if(esVend) lista=lista.filter(p=>p.vendedor===email);
+  lista=[...lista].sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  document.getElementById('pedidos-tbody').innerHTML=lista.length?lista.map(p=>`
+    <tr>
+      <td><div style="font-weight:500">${p.cliente}</div><div style="font-size:11px;color:var(--t3)">${p.telefono||''}</div></td>
+      <td style="font-size:12px;color:var(--t2)">${p.direccion}</td>
+      <td style="font-size:12px">${p.vendedor||'—'}</td>
+      <td style="font-size:12px">${fmtF(p.fecha)}${p.fechaEntrega&&p.fechaEntrega!==p.fecha?`<div style="font-size:10px;color:var(--warn)">Entrega: ${fmtF(p.fechaEntrega)}</div>`:''}</td>
+      <td class="mono" style="font-weight:500;color:${p.estado==='entregado'?'var(--a-d)':'var(--warn)'}">${fmt(p.total)}<div style="font-size:10px;color:var(--t3)">${p.estado==='pendiente'?'pendiente':'cobrado'}</div></td>
+      <td><span class="badge ${p.estado==='pendiente'?'by':'bg'}">${p.estado==='pendiente'?'Pendiente':'Entregado'}</span></td>
+      <td><div style="display:flex;gap:5px">
+        <button class="btn bsm" onclick="verDetallePedido('${p._id}')">👁</button>
+        <button class="btn bsm" onclick="imprimirPedido('${p._id}')" title="Imprimir">🖨</button>
+        ${p.estado==='pendiente'?`<button class="btn bsm bp" onclick="confirmarEntrega('${p._id}')" title="Marcar entregado">✓</button>`:''}
+        ${!esVend?`<button class="btn bsm bd" onclick="eliminarPedido('${p._id}')">🗑</button>`:''}
+      </div></td>
+    </tr>`).join('')
+    :'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">Sin pedidos</td></tr>';
+  updateBadgePedidos();
+}
+window.renderPedidos=renderPedidos;
+
+window.filtrarPedidos=function(f){
+  pedidoFiltro=f;
+  ['todos','pendiente','entregado'].forEach(x=>{
+    const b=document.getElementById('fil-'+x);
+    if(b){b.style.background=f===x?'var(--a-l)':'';b.style.color=f===x?'var(--a-d)':'';b.style.borderColor=f===x?'var(--accent)':'var(--border)';}
+  });
+  renderPedidos();
+};
+
+function updateBadgePedidos(){
+  const n=S.pedidos.filter(p=>p.estado==='pendiente').length;
+  const b=document.getElementById('badge-pedidos');
+  if(b){b.textContent=n;b.style.display=n>0?'inline-block':'none';}
+}
+
+window.abrirModalPedido=function(){
+  pedidoCarrito=[];pedidoEditId=null;
+  ['ped-cliente','ped-tel','ped-dir','ped-notas'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('ped-fecha').value=hoy();
+  document.getElementById('ped-search').value='';
+  document.getElementById('ped-results').style.display='none';
+  renderPedidoCarrito();
+  abrirMo('mo-pedido');
+};
+
+window.buscarProdPedido=function(){
+  const q=document.getElementById('ped-search').value.toLowerCase();
+  const res=document.getElementById('ped-results');
+  if(!q){res.style.display='none';return;}
+  const found=S.productos.filter(p=>p.nombre.toLowerCase().includes(q)&&p.stock>0);
+  if(!found.length){res.innerHTML='<div class="pri" style="color:var(--t3)">Sin resultados</div>';res.style.display='block';return;}
+  res.innerHTML=found.map(p=>`
+    <div class="pri" onclick="agregarProdPedido('${p._id}')">
+      <span>${p.nombre}</span>
+      <span style="color:var(--a-d);font-weight:500;font-size:12px">${fmt(p.venta)} · Stock: ${p.stock}${p.tipo==='granel'?' '+p.unidad:' uds'}</span>
+    </div>`).join('');
+  res.style.display='block';
+};
+
+window.agregarProdPedido=function(id){
+  const p=S.productos.find(x=>x._id===id);
+  const ex=pedidoCarrito.find(c=>c._id===id);
+  if(ex){if(ex.qty>=p.stock){toast('Sin más stock',false);return;}ex.qty++;}
+  else pedidoCarrito.push({_id:p._id,nombre:p.nombre,precio:p.venta,precioNormal:p.venta,qty:1,tipo:p.tipo||'unidad',maxStock:p.stock,precioMayor:p.precioMayor||0,cantMinMayor:p.cantMinMayor||0});
+  const item=pedidoCarrito.find(c=>c._id===id);
+  if(item.precioMayor&&item.cantMinMayor&&item.qty>=item.cantMinMayor) item.precio=item.precioMayor;
+  document.getElementById('ped-search').value='';
+  document.getElementById('ped-results').style.display='none';
+  renderPedidoCarrito();
+};
+
+function renderPedidoCarrito(){
+  const el=document.getElementById('ped-carrito');
+  if(!pedidoCarrito.length){el.innerHTML='<div style="color:var(--t3);font-size:12px;padding:6px 0">Sin productos aún — busca arriba</div>';return;}
+  const total=pedidoCarrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  el.innerHTML=`<div style="background:var(--s2);border-radius:var(--rs);padding:10px;margin-bottom:4px">
+    ${pedidoCarrito.map((c,i)=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:13px;border-bottom:1px solid var(--border)">
+        <span style="flex:1;font-weight:500">${c.nombre}${c.precio!==c.precioNormal?'<span style="font-size:10px;color:var(--purple);margin-left:4px">🏷️Mayor</span>':''}</span>
+        <div style="display:flex;align-items:center;gap:5px">
+          <div class="qb" onclick="chgQtyPed(${i},-1)">−</div>
+          <span style="font-weight:500;min-width:20px;text-align:center">${c.qty}</span>
+          <div class="qb" onclick="chgQtyPed(${i},1)">+</div>
+          <span style="min-width:64px;text-align:right;font-weight:500">${fmt(c.precio*c.qty)}</span>
+          <div class="qb" onclick="quitarProdPed(${i})" style="color:var(--danger)">×</div>
+        </div>
+      </div>`).join('')}
+    <div style="display:flex;justify-content:space-between;font-weight:600;font-size:14px;padding-top:8px;margin-top:4px">
+      <span>Total pedido</span><span style="color:var(--a-d)">${fmt(total)}</span>
+    </div>
+  </div>`;
+}
+
+window.chgQtyPed=function(i,d){
+  pedidoCarrito[i].qty+=d;
+  if(pedidoCarrito[i].qty<=0){pedidoCarrito.splice(i,1);}
+  else{const c=pedidoCarrito[i];if(c.precioMayor&&c.cantMinMayor)c.precio=c.qty>=c.cantMinMayor?c.precioMayor:c.precioNormal;}
+  renderPedidoCarrito();
+};
+window.quitarProdPed=function(i){pedidoCarrito.splice(i,1);renderPedidoCarrito();};
+
+window.guardarPedido=async function(){
+  const cliente=document.getElementById('ped-cliente').value.trim();
+  const dir=document.getElementById('ped-dir').value.trim();
+  if(!cliente||!dir){toast('Ingresa el cliente y la dirección',false);return;}
+  if(!pedidoCarrito.length){toast('Agrega al menos un producto',false);return;}
+  const total=pedidoCarrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  const data={
+    cliente,telefono:document.getElementById('ped-tel').value.trim(),
+    direccion:dir,notas:document.getElementById('ped-notas').value.trim(),
+    fecha:hoy(),fechaEntrega:document.getElementById('ped-fecha').value||hoy(),
+    vendedor:auth.currentUser?.email||'',
+    items:pedidoCarrito.map(c=>({...c})),total,estado:'pendiente',
+  };
+  // Descontar inventario inmediatamente
+  for(const c of pedidoCarrito){
+    const p=S.productos.find(x=>x._id===c._id);
+    if(!p)continue;
+    const ns=Math.max(0,p.stock-c.qty);
+    await guardarDoc('productos',p._id,{stock:ns}); p.stock=ns;
+  }
+  const newId=await agregarDoc('pedidos',data);
+  S.pedidos.push({_id:newId,...data});
+  cerrarMo('mo-pedido'); renderPedidos(); updateBadgePedidos();
+  toast('Pedido registrado para '+cliente);
+};
+
+window.verDetallePedido=function(id){
+  const p=S.pedidos.find(x=>x._id===id);
+  pedidoEditId=id;
+  document.getElementById('detalle-pedido-content').innerHTML=`
+    <div style="background:var(--s2);border-radius:var(--rs);padding:12px;margin-bottom:12px">
+      <div style="font-weight:600;font-size:15px">${p.cliente}</div>
+      <div style="font-size:12px;color:var(--t2);margin-top:5px;display:flex;flex-direction:column;gap:3px">
+        <span>📞 ${p.telefono||'Sin teléfono'}</span>
+        <span>📍 ${p.direccion}</span>
+        <span>🚚 Vendedor: ${p.vendedor||'—'}</span>
+        <span>📅 Pedido: ${fmtF(p.fecha)} · Entrega: ${fmtF(p.fechaEntrega)}</span>
+        ${p.notas?`<span>📝 ${p.notas}</span>`:''}
+      </div>
+    </div>
+    <div style="background:var(--s2);border-radius:var(--rs);padding:10px;margin-bottom:10px">
+      ${p.items.map(i=>`
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--border)">
+          <span>${i.nombre} ×${i.qty}</span>
+          <span style="font-weight:500">${fmt(i.precio*i.qty)}</span>
+        </div>`).join('')}
+      <div style="display:flex;justify-content:space-between;font-weight:600;font-size:14px;padding-top:8px;margin-top:4px">
+        <span>Total</span>
+        <span style="color:${p.estado==='pendiente'?'var(--warn)':'var(--a-d)'}">${fmt(p.total)}<span style="font-size:11px;font-weight:400;margin-left:4px">${p.estado==='pendiente'?'(pendiente)':'(cobrado)'}</span></span>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--t3)">⚠️ El dinero de este pedido ${p.estado==='pendiente'?'<strong>NO cuenta</strong> en el cierre de caja hasta ser entregado':'<strong>SÍ cuenta</strong> en el cierre de caja'}</div>`;
+  document.getElementById('btn-entregar-pedido').style.display=p.estado==='pendiente'?'inline-flex':'none';
+  abrirMo('mo-detalle-pedido');
+};
+
+window.confirmarEntrega=async function(id){
+  const p=S.pedidos.find(x=>x._id===id);
+  if(!p)return;
+  p.estado='entregado'; p.fechaEntrega=hoy();
+  await guardarDoc('pedidos',id,{estado:'entregado',fechaEntrega:hoy()});
+  // Registrar como venta cobrada
+  const vData={fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+    pago:'efectivo',total:p.total,items:p.items,esPedido:true,cliente:p.cliente,pagoCliente:p.total,vueltos:0};
+  const vId=await agregarDoc('ventas',vData);
+  S.ventas.push({_id:vId,...vData});
+  cerrarMo('mo-detalle-pedido'); renderPedidos(); updateBadgePedidos();
+  toast('✓ Pedido entregado — '+fmt(p.total)+' registrado en caja');
+};
+
+window.entregarPedido=function(){if(pedidoEditId)confirmarEntrega(pedidoEditId);};
+
+window.imprimirPedido=function(id){
+  const p=S.pedidos.find(x=>x._id===id);
+  if(!p)return;
+  const w=32; const lin='─'.repeat(w);
+  const ctr=(t)=>' '.repeat(Math.max(0,Math.floor((w-t.length)/2)))+t;
+  const lj=(a,b)=>{const s=String(a),e=String(b),d=w-s.length-e.length;return s+'.'.repeat(Math.max(1,d))+e;};
+  let txt=ctr(S.config.nombre||'TIENDA DE ASEO')+'\n';
+  if(S.config.direccion)txt+=ctr(S.config.direccion)+'\n';
+  if(S.config.telefono)txt+=ctr('Tel: '+S.config.telefono)+'\n';
+  txt+=lin+'\nPEDIDO\n'+lin+'\n';
+  txt+=`Cliente: ${p.cliente}\n`;
+  txt+=`Tel:     ${p.telefono||'—'}\n`;
+  txt+=`Direcc:  ${p.direccion}\n`;
+  txt+=`Vendedor:${p.vendedor||'—'}\n`;
+  txt+=`Fecha:   ${fmtF(p.fecha)}\n`;
+  txt+=`Entrega: ${fmtF(p.fechaEntrega)}\n`;
+  txt+=lin+'\n';
+  p.items.forEach(i=>{txt+=lj(i.nombre.substring(0,18)+' x'+i.qty,fmt(i.precio*i.qty))+'\n';});
+  txt+=lin+'\n';
+  txt+=lj('TOTAL:',fmt(p.total))+'\n';
+  txt+=lin+'\n';
+  txt+=ctr('Estado: '+(p.estado==='pendiente'?'PENDIENTE':'ENTREGADO'))+'\n';
+  if(p.notas)txt+='Notas: '+p.notas+'\n';
+  document.getElementById('ticket-print').innerHTML='<pre style="font-family:Courier New,monospace;font-size:11px;line-height:1.5;color:#000;margin:0">'+txt+'</pre>';
+  document.getElementById('ticket-print').style.display='block';
+  document.getElementById('ticket-preview').innerHTML='<pre style="white-space:pre;font-family:Courier New,monospace;font-size:11px;line-height:1.5">'+txt+'</pre>';
+  abrirMo('mo-ticket');
+};
+
+window.eliminarPedido=async function(id){
+  if(!confirm('¿Eliminar este pedido?'))return;
+  await borrarDoc('pedidos',id);
+  S.pedidos=S.pedidos.filter(p=>p._id!==id);
+  renderPedidos(); toast('Pedido eliminado');
+};
+
+// close dropdowns on outside click
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.pos-wrap')){
+    document.getElementById('v-results').style.display='none';
+    const pr=document.getElementById('ped-results');if(pr)pr.style.display='none';
+  }
+});
 </script>
 
 <style>
@@ -989,12 +1274,13 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </div>
     <nav class="nav">
       <div class="nav-item active" data-page="dashboard" onclick="goTo('dashboard')"><span>📊</span> Dashboard</div>
-      <div class="nav-item" data-page="inventario" onclick="goTo('inventario')"><span>📦</span> Inventario</div>
-      <div class="nav-item" data-page="venta" onclick="goTo('venta')"><span>🛒</span> Nueva Venta</div>
+      <div class="nav-item" id="nav-inventario" data-page="inventario" onclick="goTo('inventario')"><span>📦</span> Inventario</div>
+      <div class="nav-item" id="nav-pedidos" data-page="pedidos" onclick="goTo('pedidos')" style="display:none"><span>🚚</span> Pedidos <span class="nav-badge" id="badge-pedidos" style="display:none">0</span></div>
+      <div class="nav-item" id="nav-venta" data-page="venta" onclick="goTo('venta')"><span>🛒</span> Nueva Venta</div>
       <div class="nav-item" data-page="fiados" id="nav-fiados" onclick="goTo('fiados')"><span>📋</span> Fiados <span class="nav-badge" id="badge-fiados" style="display:none">0</span></div>
-      <div class="nav-item" data-page="caja" onclick="goTo('caja')"><span>💰</span> Cierre de Caja</div>
-      <div class="nav-item" data-page="reporte" onclick="goTo('reporte')"><span>📈</span> Reportes</div>
-      <div class="nav-item" data-page="config" onclick="goTo('config')"><span>⚙️</span> Mi negocio</div>
+      <div class="nav-item" id="nav-caja" data-page="caja" onclick="goTo('caja')"><span>💰</span> Cierre de Caja</div>
+      <div class="nav-item" id="nav-reporte" data-page="reporte" onclick="goTo('reporte')"><span>📈</span> Reportes</div>
+      <div class="nav-item" id="nav-config" data-page="config" onclick="goTo('config')"><span>⚙️</span> Mi negocio</div>
     </nav>
     <div class="sidebar-foot">
       <div id="clock-d" style="font-size:11px;color:var(--t3);margin-bottom:8px;font-family:'DM Mono',monospace"></div>
@@ -1013,7 +1299,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </div>
 
     <div class="page" id="page-inventario">
-      <div class="ph"><div><div class="pt">Inventario</div><div class="ps">Productos de tu negocio</div></div><button class="btn bp" onclick="abrirModalProd()">+ Agregar</button></div>
+      <div class="ph"><div><div class="pt">Inventario</div><div class="ps">Productos de tu negocio</div></div><button class="btn bp" id="btn-agregar-prod" onclick="abrirModalProd()">+ Agregar</button></div>
       <div class="card">
         <div style="display:flex;gap:9px;margin-bottom:13px;flex-wrap:wrap">
           <div class="pos-wrap" style="flex:1;min-width:160px"><input class="fi" id="inv-q" placeholder="🔍 Buscar por nombre o código de barras..." oninput="renderInv()"></div>
@@ -1083,7 +1369,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 
     <div class="page" id="page-config">
       <div class="ph"><div><div class="pt">Mi negocio</div><div class="ps">Datos que aparecen en la factura</div></div></div>
-      <div style="max-width:480px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:860px">
         <div class="card">
           <div style="font-size:13px;color:var(--t2);margin-bottom:14px">Cuenta: <span id="cfg-email" style="font-weight:500;color:var(--text)"></span></div>
           <div class="fg"><label class="fl">Nombre del negocio</label><input class="fi" id="cfg-nombre-i" placeholder="Ej: Tienda de Aseo San José"></div>
@@ -1092,6 +1378,34 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
           <div class="fg mt8"><label class="fl">Mensaje en la factura</label><input class="fi" id="cfg-msg-i" placeholder="¡Gracias por su compra!"></div>
           <button class="btn bp mt8" onclick="guardarConfig()">Guardar cambios</button>
         </div>
+        <div class="card">
+          <div style="font-weight:600;font-size:14px;margin-bottom:10px">🚚 Vendedores</div>
+          <div style="font-size:12px;color:var(--t2);margin-bottom:12px">Agrega los correos de tus vendedores. Solo verán Pedidos e Inventario.</div>
+          <div id="vendedores-lista" style="margin-bottom:12px"></div>
+          <div style="display:flex;gap:8px">
+            <input class="fi" id="nuevo-vendedor" placeholder="correo@ejemplo.com" style="flex:1">
+            <button class="btn bp" onclick="agregarVendedor()">+ Agregar</button>
+          </div>
+          <div style="font-size:11px;color:var(--t3);margin-top:6px">El correo debe estar registrado en Firebase Authentication</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="page-pedidos">
+      <div class="ph">
+        <div><div class="pt">Pedidos</div><div class="ps" id="pedidos-sub">Toma y gestiona pedidos de clientes</div></div>
+        <button class="btn bp" onclick="abrirModalPedido()">+ Nuevo pedido</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px" id="pedidos-stats"></div>
+      <div class="card">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <div style="display:flex;gap:6px">
+            <button class="btn bsm" id="fil-todos" onclick="filtrarPedidos('todos')" style="background:var(--a-l);color:var(--a-d);border-color:var(--accent)">Todos</button>
+            <button class="btn bsm" id="fil-pendiente" onclick="filtrarPedidos('pendiente')">Pendientes</button>
+            <button class="btn bsm" id="fil-entregado" onclick="filtrarPedidos('entregado')">Entregados</button>
+          </div>
+        </div>
+        <div class="tw"><table><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
       </div>
     </div>
   </div>
@@ -1174,6 +1488,39 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 </div></div>
 
 <div id="ticket-print"></div>
+<!-- MODAL PEDIDO -->
+<div class="mo" id="mo-pedido"><div class="md" style="width:500px">
+  <div class="mt2" id="mo-pedido-title">Nuevo pedido</div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Cliente / Tienda *</label><input class="fi" id="ped-cliente" placeholder="Nombre del cliente o tienda"></div>
+    <div class="fg"><label class="fl">Teléfono</label><input class="fi" id="ped-tel" placeholder="300 123 4567"></div>
+  </div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Dirección de entrega *</label><input class="fi" id="ped-dir" placeholder="Cra 5 #12-34, Barrio..."></div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Fecha de entrega</label><input class="fi" id="ped-fecha" type="date"></div>
+  <div class="divider"></div>
+  <div style="font-weight:600;font-size:13px;margin-bottom:8px">Productos del pedido</div>
+  <div class="pos-wrap" style="margin-bottom:10px">
+    <input class="fi" id="ped-search" placeholder="Buscar producto..." oninput="buscarProdPedido()" autocomplete="off">
+    <div class="pr" id="ped-results" style="display:none"></div>
+  </div>
+  <div id="ped-carrito" style="margin-bottom:10px"></div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Notas adicionales</label><input class="fi" id="ped-notas" placeholder="Instrucciones especiales..."></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-pedido')">Cancelar</button>
+    <button class="btn bp" onclick="guardarPedido()">✓ Guardar pedido</button>
+  </div>
+</div></div>
+
+<!-- MODAL DETALLE PEDIDO -->
+<div class="mo" id="mo-detalle-pedido"><div class="md" style="width:440px">
+  <div class="mt2">Detalle del pedido</div>
+  <div id="detalle-pedido-content"></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-detalle-pedido')">Cerrar</button>
+    <button class="btn bp" id="btn-entregar-pedido" onclick="entregarPedido()">✓ Marcar entregado</button>
+  </div>
+</div></div>
+
 <div id="toast" style="position:fixed;bottom:22px;right:22px;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;display:none;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.2)"></div>
 
 </body>
