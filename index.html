@@ -958,6 +958,7 @@ function renderPedidos(){
       <td style="font-size:12px;color:var(--t2)">${p.direccion}</td>
       <td style="font-size:12px">${p.vendedor||'—'}</td>
       <td style="font-size:12px">${fmtF(p.fecha)}${p.fechaEntrega&&p.fechaEntrega!==p.fecha?`<div style="font-size:10px;color:var(--warn)">Entrega: ${fmtF(p.fechaEntrega)}</div>`:''}</td>
+      <td><span class="badge ${p.pago==='efectivo'?'bb':p.pago==='transferencia'?'bpu':'by'}">${p.pago||'efectivo'}</span></td>
       <td class="mono" style="font-weight:500;color:${p.estado==='entregado'?'var(--a-d)':'var(--warn)'}">${fmt(p.total)}<div style="font-size:10px;color:var(--t3)">${p.estado==='pendiente'?'pendiente':'cobrado'}</div></td>
       <td><span class="badge ${p.estado==='pendiente'?'by':'bg'}">${p.estado==='pendiente'?'Pendiente':'Entregado'}</span></td>
       <td><div style="display:flex;gap:5px">
@@ -993,8 +994,17 @@ window.abrirModalPedido=function(){
   document.getElementById('ped-fecha').value=hoy();
   document.getElementById('ped-search').value='';
   document.getElementById('ped-results').style.display='none';
+  selPagoPed('efectivo');
   renderPedidoCarrito();
   abrirMo('mo-pedido');
+};
+
+window.selPagoPed=function(t){
+  window._pedPago=t;
+  ['efectivo','transferencia','fiado'].forEach(x=>{
+    const el=document.getElementById('ped-po-'+x);
+    if(el){el.classList.toggle('sel',x===t);}
+  });
 };
 
 window.buscarProdPedido=function(){
@@ -1059,12 +1069,13 @@ window.guardarPedido=async function(){
   if(!cliente||!dir){toast('Ingresa el cliente y la dirección',false);return;}
   if(!pedidoCarrito.length){toast('Agrega al menos un producto',false);return;}
   const total=pedidoCarrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  const pago=window._pedPago||'efectivo';
   const data={
     cliente,telefono:document.getElementById('ped-tel').value.trim(),
     direccion:dir,notas:document.getElementById('ped-notas').value.trim(),
     fecha:hoy(),fechaEntrega:document.getElementById('ped-fecha').value||hoy(),
     vendedor:auth.currentUser?.email||'',
-    items:pedidoCarrito.map(c=>({...c})),total,estado:'pendiente',
+    items:pedidoCarrito.map(c=>({...c})),total,estado:'pendiente',pago,
   };
   // Descontar inventario inmediatamente
   for(const c of pedidoCarrito){
@@ -1076,12 +1087,13 @@ window.guardarPedido=async function(){
   const newId=await agregarDoc('pedidos',data);
   S.pedidos.push({_id:newId,...data});
   cerrarMo('mo-pedido'); renderPedidos(); updateBadgePedidos();
-  toast('Pedido registrado para '+cliente);
+  toast('Pedido registrado para '+cliente+' — Pago: '+pago);
 };
 
 window.verDetallePedido=function(id){
   const p=S.pedidos.find(x=>x._id===id);
   pedidoEditId=id;
+  window._cobroPago='efectivo';
   document.getElementById('detalle-pedido-content').innerHTML=`
     <div style="background:var(--s2);border-radius:var(--rs);padding:12px;margin-bottom:12px">
       <div style="font-weight:600;font-size:15px">${p.cliente}</div>
@@ -1091,6 +1103,7 @@ window.verDetallePedido=function(id){
         <span>🚚 Vendedor: ${p.vendedor||'—'}</span>
         <span>📅 Pedido: ${fmtF(p.fecha)} · Entrega: ${fmtF(p.fechaEntrega)}</span>
         ${p.notas?`<span>📝 ${p.notas}</span>`:''}
+        ${p.pago?`<span>💳 Pago: <strong>${p.pago}</strong></span>`:''}
       </div>
     </div>
     <div style="background:var(--s2);border-radius:var(--rs);padding:10px;margin-bottom:10px">
@@ -1101,26 +1114,41 @@ window.verDetallePedido=function(id){
         </div>`).join('')}
       <div style="display:flex;justify-content:space-between;font-weight:600;font-size:14px;padding-top:8px;margin-top:4px">
         <span>Total</span>
-        <span style="color:${p.estado==='pendiente'?'var(--warn)':'var(--a-d)'}">${fmt(p.total)}<span style="font-size:11px;font-weight:400;margin-left:4px">${p.estado==='pendiente'?'(pendiente)':'(cobrado)'}</span></span>
+        <span style="color:${p.estado==='pendiente'?'var(--warn)':'var(--a-d)'}">${fmt(p.total)}</span>
       </div>
     </div>
-    <div style="font-size:12px;color:var(--t3)">⚠️ El dinero de este pedido ${p.estado==='pendiente'?'<strong>NO cuenta</strong> en el cierre de caja hasta ser entregado':'<strong>SÍ cuenta</strong> en el cierre de caja'}</div>`;
+    <div style="font-size:12px;color:var(--t3)">⚠️ El dinero ${p.estado==='pendiente'?'<strong>NO cuenta</strong> en caja hasta que el cliente pague aquí en la tienda':'<strong>YA está</strong> registrado en el cierre de caja'}</div>`;
+
+  // Mostrar selector de pago solo si está pendiente y es el dueño
+  const seccion=document.getElementById('cobro-pedido-section');
+  seccion.style.display=(p.estado==='pendiente'&&S.rol==='dueno')?'block':'none';
+  selCobroPed('efectivo');
   document.getElementById('btn-entregar-pedido').style.display=p.estado==='pendiente'?'inline-flex':'none';
   abrirMo('mo-detalle-pedido');
+};
+
+window.selCobroPed=function(t){
+  window._cobroPago=t;
+  ['efectivo','transferencia','fiado'].forEach(x=>{
+    const el=document.getElementById('cobro-po-'+x);
+    if(el){el.classList.toggle('sel',x===t);}
+  });
 };
 
 window.confirmarEntrega=async function(id){
   const p=S.pedidos.find(x=>x._id===id);
   if(!p)return;
-  p.estado='entregado'; p.fechaEntrega=hoy();
-  await guardarDoc('pedidos',id,{estado:'entregado',fechaEntrega:hoy()});
-  // Registrar como venta cobrada
+  const pago=window._cobroPago||'efectivo';
+  p.estado='entregado'; p.fechaEntrega=hoy(); p.pago=pago;
+  await guardarDoc('pedidos',id,{estado:'entregado',fechaEntrega:hoy(),pago});
+  // Registrar como venta en el cierre de caja con la forma de pago elegida por el dueño
   const vData={fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
-    pago:'efectivo',total:p.total,items:p.items,esPedido:true,cliente:p.cliente,pagoCliente:p.total,vueltos:0};
+    pago:pago==='fiado'?'efectivo':pago,
+    total:p.total,items:p.items,esPedido:true,cliente:p.cliente,pagoCliente:p.total,vueltos:0};
   const vId=await agregarDoc('ventas',vData);
   S.ventas.push({_id:vId,...vData});
   cerrarMo('mo-detalle-pedido'); renderPedidos(); updateBadgePedidos();
-  toast('✓ Pedido entregado — '+fmt(p.total)+' registrado en caja');
+  toast('✓ Cobrado — '+fmt(p.total)+' en '+pago+' registrado en caja');
 };
 
 window.entregarPedido=function(){if(pedidoEditId)confirmarEntrega(pedidoEditId);};
@@ -1145,6 +1173,7 @@ window.imprimirPedido=function(id){
   p.items.forEach(i=>{txt+=lj(i.nombre.substring(0,18)+' x'+i.qty,fmt(i.precio*i.qty))+'\n';});
   txt+=lin+'\n';
   txt+=lj('TOTAL:',fmt(p.total))+'\n';
+  txt+=lj('Forma de pago:',(p.pago||'efectivo').toUpperCase())+'\n';
   txt+=lin+'\n';
   txt+=ctr('Estado: '+(p.estado==='pendiente'?'PENDIENTE':'ENTREGADO'))+'\n';
   if(p.notas)txt+='Notas: '+p.notas+'\n';
@@ -1410,7 +1439,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <button class="btn bsm" id="fil-entregado" onclick="filtrarPedidos('entregado')">Entregados</button>
           </div>
         </div>
-        <div class="tw"><table><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
+        <div class="tw"><table><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Pago</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
       </div>
     </div>
   </div>
@@ -1520,9 +1549,18 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 <div class="mo" id="mo-detalle-pedido"><div class="md" style="width:440px">
   <div class="mt2">Detalle del pedido</div>
   <div id="detalle-pedido-content"></div>
+  <div id="cobro-pedido-section" style="display:none">
+    <div class="divider"></div>
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px">💳 Forma de pago del cliente</div>
+    <div class="pay-toggle">
+      <div class="po sel" id="cobro-po-efectivo" onclick="selCobroPed('efectivo')">💵 Efectivo</div>
+      <div class="po" id="cobro-po-transferencia" onclick="selCobroPed('transferencia')">📲 Transferencia</div>
+      <div class="po" id="cobro-po-fiado" onclick="selCobroPed('fiado')">📋 Fiado</div>
+    </div>
+  </div>
   <div class="ma">
     <button class="btn" onclick="cerrarMo('mo-detalle-pedido')">Cerrar</button>
-    <button class="btn bp" id="btn-entregar-pedido" onclick="entregarPedido()">✓ Marcar entregado</button>
+    <button class="btn bp" id="btn-entregar-pedido" onclick="entregarPedido()">💰 Cobrar y cerrar pedido</button>
   </div>
 </div></div>
 
