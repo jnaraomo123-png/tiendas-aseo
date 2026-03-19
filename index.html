@@ -993,7 +993,7 @@ function renderPedidos(){
       <td><div style="display:flex;gap:5px;flex-wrap:wrap">
         <button class="btn bsm" onclick="verDetallePedido('${p._id}')">👁</button>
         <button class="btn bsm" onclick="imprimirPedido('${p._id}')" title="Imprimir">🖨</button>
-        ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="confirmarEntrega('${p._id}')" title="Marcar entregado">✓</button>`:''}
+        ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="verDetallePedido('${p._id}')" title="Cobrar pedido">✓ Cobrar</button>`:''}
         ${!esVend&&tieneSaldo?`<button class="btn bsm bp" onclick="abrirAbono('${p._id}','pedido')" title="Registrar abono">💰 Abonar</button>`:''}
         ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bd" onclick="eliminarPedido('${p._id}')">🗑</button>`:''}
       </div></td>
