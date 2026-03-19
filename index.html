@@ -33,10 +33,15 @@ const auth = getAuth(app);
 const db   = getFirestore(app);
 
 // ── Utilidades Firestore ──
-const uid = () => auth.currentUser?.uid;
-const negRef  = (col) => collection(db, 'negocios', uid(), col);
-const negDoc  = (col, id) => doc(db, 'negocios', uid(), col, id);
-const cfgDoc  = () => doc(db, 'negocios', uid(), 'config', 'datos');
+// El vendedor apunta a los datos del dueño, no a los suyos
+const DUENO_UID = 'enb5JOVX50Worq2Lw5eyJHwgkA82';
+const uidActivo = () => {
+  // Si el usuario es vendedor (no es el dueño), usa el UID del dueño
+  return DUENO_UID; // Siempre apunta al dueño — el rol controla los permisos en la UI
+};
+const negRef  = (col) => collection(db, 'negocios', uidActivo(), col);
+const negDoc  = (col, id) => doc(db, 'negocios', uidActivo(), col, id);
+const cfgDoc  = () => doc(db, 'negocios', uidActivo(), 'config', 'datos');
 
 async function leerCol(col) {
   const snap = await getDocs(negRef(col));
