@@ -761,6 +761,7 @@ function mostrarTicket(v){
   document.getElementById('ticket-preview').innerHTML='<pre style="white-space:pre;font-family:Courier New,monospace;font-size:11px;line-height:1.5">'+txt+'</pre>';
   document.getElementById('ticket-print').innerHTML='<pre style="font-family:Courier New,monospace;font-size:11px;line-height:1.5;color:#000;margin:0">'+txt+'</pre>';
   document.getElementById('ticket-print').style.display='block';
+  document.getElementById('pedido-print').style.display='none';
   abrirMo('mo-ticket');
 }
 
@@ -1119,11 +1120,13 @@ window.verDetallePedido=function(id){
     </div>
     <div style="font-size:12px;color:var(--t3)">⚠️ El dinero ${p.estado==='pendiente'?'<strong>NO cuenta</strong> en caja hasta que el cliente pague aquí en la tienda':'<strong>YA está</strong> registrado en el cierre de caja'}</div>`;
 
-  // Mostrar selector de pago solo si está pendiente y es el dueño
+  // Mostrar selector de pago y botón SOLO si es dueño y pedido pendiente
+  const esDueno = S.rol === 'dueno';
   const seccion=document.getElementById('cobro-pedido-section');
-  seccion.style.display=(p.estado==='pendiente'&&S.rol==='dueno')?'block':'none';
+  seccion.style.display=(p.estado==='pendiente' && esDueno)?'block':'none';
   selCobroPed('efectivo');
-  document.getElementById('btn-entregar-pedido').style.display=p.estado==='pendiente'?'inline-flex':'none';
+  // Botón cobrar: solo dueño, solo pendiente
+  document.getElementById('btn-entregar-pedido').style.display=(p.estado==='pendiente' && esDueno)?'inline-flex':'none';
   abrirMo('mo-detalle-pedido');
 };
 
@@ -1156,30 +1159,84 @@ window.entregarPedido=function(){if(pedidoEditId)confirmarEntrega(pedidoEditId);
 window.imprimirPedido=function(id){
   const p=S.pedidos.find(x=>x._id===id);
   if(!p)return;
-  const w=32; const lin='─'.repeat(w);
-  const ctr=(t)=>' '.repeat(Math.max(0,Math.floor((w-t.length)/2)))+t;
-  const lj=(a,b)=>{const s=String(a),e=String(b),d=w-s.length-e.length;return s+'.'.repeat(Math.max(1,d))+e;};
-  let txt=ctr(S.config.nombre||'TIENDA DE ASEO')+'\n';
-  if(S.config.direccion)txt+=ctr(S.config.direccion)+'\n';
-  if(S.config.telefono)txt+=ctr('Tel: '+S.config.telefono)+'\n';
-  txt+=lin+'\nPEDIDO\n'+lin+'\n';
-  txt+=`Cliente: ${p.cliente}\n`;
-  txt+=`Tel:     ${p.telefono||'—'}\n`;
-  txt+=`Direcc:  ${p.direccion}\n`;
-  txt+=`Vendedor:${p.vendedor||'—'}\n`;
-  txt+=`Fecha:   ${fmtF(p.fecha)}\n`;
-  txt+=`Entrega: ${fmtF(p.fechaEntrega)}\n`;
-  txt+=lin+'\n';
-  p.items.forEach(i=>{txt+=lj(i.nombre.substring(0,18)+' x'+i.qty,fmt(i.precio*i.qty))+'\n';});
-  txt+=lin+'\n';
-  txt+=lj('TOTAL:',fmt(p.total))+'\n';
-  txt+=lj('Forma de pago:',(p.pago||'efectivo').toUpperCase())+'\n';
-  txt+=lin+'\n';
-  txt+=ctr('Estado: '+(p.estado==='pendiente'?'PENDIENTE':'ENTREGADO'))+'\n';
-  if(p.notas)txt+='Notas: '+p.notas+'\n';
-  document.getElementById('ticket-print').innerHTML='<pre style="font-family:Courier New,monospace;font-size:11px;line-height:1.5;color:#000;margin:0">'+txt+'</pre>';
-  document.getElementById('ticket-print').style.display='block';
-  document.getElementById('ticket-preview').innerHTML='<pre style="white-space:pre;font-family:Courier New,monospace;font-size:11px;line-height:1.5">'+txt+'</pre>';
+  const nombre=S.config.nombre||'TIENDA DE ASEO';
+  const tel=S.config.telefono||'';
+  const dir=S.config.direccion||'';
+  const msg=S.config.mensaje||'¡Gracias por su compra!';
+
+  const filas=p.items.map(i=>`
+    <tr>
+      <td style="padding:4px 6px;border-bottom:1px solid #eee">${i.nombre}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:center">${i.qty||1}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${fmt(i.precio)}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right;font-weight:600">${fmt(i.precio*(i.qty||1))}</td>
+    </tr>`).join('');
+
+  const html=`
+    <div style="font-family:Arial,sans-serif;font-size:11px;color:#000;width:100%">
+      <!-- ENCABEZADO -->
+      <div style="text-align:center;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:8px">
+        <div style="font-size:16px;font-weight:bold;letter-spacing:1px">${nombre}</div>
+        ${dir?`<div style="font-size:10px;margin-top:2px">📍 ${dir}</div>`:''}
+        ${tel?`<div style="font-size:10px">📞 ${tel}</div>`:''}
+      </div>
+      <!-- TITULO Y DATOS -->
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <div style="font-size:13px;font-weight:bold;margin-bottom:4px">PEDIDO</div>
+          <div><b>Cliente:</b> ${p.cliente}</div>
+          ${p.telefono?`<div><b>Tel:</b> ${p.telefono}</div>`:''}
+          <div><b>Dirección:</b> ${p.direccion}</div>
+          ${p.notas?`<div><b>Notas:</b> ${p.notas}</div>`:''}
+        </div>
+        <div style="text-align:right;font-size:10px;color:#555">
+          <div><b>Vendedor:</b> ${p.vendedor||'—'}</div>
+          <div><b>Fecha pedido:</b> ${fmtF(p.fecha)}</div>
+          <div><b>Fecha entrega:</b> ${fmtF(p.fechaEntrega)}</div>
+          <div style="margin-top:4px"><b>Estado:</b> <span style="background:${p.estado==='pendiente'?'#FAEEDA':'#E1F5EE'};padding:2px 6px;border-radius:4px;color:${p.estado==='pendiente'?'#BA7517':'#0F6E56'}">${p.estado==='pendiente'?'PENDIENTE':'ENTREGADO'}</span></div>
+        </div>
+      </div>
+      <!-- PRODUCTOS -->
+      <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
+        <thead>
+          <tr style="background:#f5f5f5;border-top:1px solid #000;border-bottom:1px solid #000">
+            <th style="padding:5px 6px;text-align:left;font-size:10px">Producto</th>
+            <th style="padding:5px 6px;text-align:center;font-size:10px">Cant.</th>
+            <th style="padding:5px 6px;text-align:right;font-size:10px">P. Unit.</th>
+            <th style="padding:5px 6px;text-align:right;font-size:10px">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>${filas}</tbody>
+        <tfoot>
+          <tr style="border-top:2px solid #000">
+            <td colspan="3" style="padding:5px 6px;font-weight:bold;font-size:12px">TOTAL</td>
+            <td style="padding:5px 6px;font-weight:bold;font-size:13px;text-align:right">${fmt(p.total)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      <!-- PIE -->
+      <div style="border-top:1px dashed #999;padding-top:6px;text-align:center;font-size:10px;color:#555">
+        ${msg}
+      </div>
+      <!-- FIRMA -->
+      <div style="display:flex;justify-content:space-around;margin-top:12px;font-size:10px">
+        <div style="text-align:center">
+          <div style="border-top:1px solid #000;width:120px;margin:0 auto"></div>
+          <div style="margin-top:3px">Firma cliente</div>
+        </div>
+        <div style="text-align:center">
+          <div style="border-top:1px solid #000;width:120px;margin:0 auto"></div>
+          <div style="margin-top:3px">Recibido conforme</div>
+        </div>
+      </div>
+    </div>`;
+
+  // Mostrar preview en modal
+  document.getElementById('ticket-preview').innerHTML=html;
+  // Para impresión usar pedido-print
+  document.getElementById('pedido-print').innerHTML=html;
+  document.getElementById('pedido-print').style.display='block';
+  document.getElementById('ticket-print').style.display='none';
   abrirMo('mo-ticket');
 };
 
@@ -1276,8 +1333,37 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 .vueltos-monto{font-size:32px;font-weight:600;color:var(--a-d);letter-spacing:-1px}
 .vueltos-label{font-size:12px;color:var(--a-d);margin-top:2px}
 .vueltos-warn{background:var(--danger-l);border:2px solid var(--danger);border-radius:var(--r);padding:12px;text-align:center;margin:12px 0;color:var(--danger);font-weight:600}
-@media print{body *{visibility:hidden!important}#ticket-print,#ticket-print *{visibility:visible!important}#ticket-print{position:fixed!important;left:0;top:0;width:80mm!important;font-family:'Courier New',monospace!important;font-size:11px!important;color:#000!important;background:#fff!important;padding:4mm!important}}
+@media print {
+  body * { visibility: hidden !important; }
+  /* Tiquete térmico de venta */
+  #ticket-print, #ticket-print * { visibility: visible !important; }
+  #ticket-print {
+    position: fixed !important;
+    left: 0; top: 0;
+    width: 80mm !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 11px !important;
+    color: #000 !important;
+    background: #fff !important;
+    padding: 4mm !important;
+  }
+  /* Media carta para pedidos */
+  #pedido-print, #pedido-print * { visibility: visible !important; }
+  #pedido-print {
+    position: fixed !important;
+    left: 0; top: 0;
+    width: 21.59cm !important;
+    height: 13.97cm !important;
+    font-family: Arial, sans-serif !important;
+    font-size: 11px !important;
+    color: #000 !important;
+    background: #fff !important;
+    padding: 10mm 15mm !important;
+    box-sizing: border-box !important;
+  }
+}
 #ticket-print{display:none}
+#pedido-print{display:none}
 .alert{padding:9px 13px;border-radius:var(--rs);font-size:13px;margin-bottom:13px;display:flex;align-items:center;gap:8px}
 .aw{background:var(--warn-l);color:var(--warn);border:1px solid #FAC775}.as{background:var(--a-l);color:var(--a-d);border:1px solid #9FE1CB}.ai{background:var(--info-l);color:var(--info);border:1px solid #B5D4F4}
 .divider{height:1px;background:var(--border);margin:14px 0}.mono{font-family:'DM Mono',monospace}.muted{color:var(--t2)}
@@ -1522,6 +1608,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 </div></div>
 
 <div id="ticket-print"></div>
+<div id="pedido-print"></div>
 <!-- MODAL PEDIDO -->
 <div class="mo" id="mo-pedido"><div class="md" style="width:500px">
   <div class="mt2" id="mo-pedido-title">Nuevo pedido</div>
