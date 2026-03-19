@@ -973,27 +973,32 @@ function renderPedidos(){
   let lista=pedidoFiltro==='todos'?S.pedidos:S.pedidos.filter(p=>p.estado===pedidoFiltro);
   if(esVend) lista=lista.filter(p=>p.vendedor===email);
   lista=[...lista].sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  document.getElementById('pedidos-tbody').innerHTML=lista.length?lista.map(p=>`
-    <tr>
+  document.getElementById('pedidos-tbody').innerHTML=lista.length?lista.map(p=>{
+    const tieneSaldo=p.pago==='fiado'&&p.estado==='entregado'&&(p.saldo===undefined||p.saldo>0);
+    const pagado=p.estado==='entregado'&&(!tieneSaldo);
+    return `<tr>
       <td><div style="font-weight:500">${p.cliente}</div><div style="font-size:11px;color:var(--t3)">${p.telefono||''}</div></td>
       <td style="font-size:12px;color:var(--t2)">${p.direccion}</td>
       <td style="font-size:12px">${p.vendedor||'—'}</td>
       <td style="font-size:12px">${fmtF(p.fecha)}${p.fechaEntrega&&p.fechaEntrega!==p.fecha?`<div style="font-size:10px;color:var(--warn)">Entrega: ${fmtF(p.fechaEntrega)}</div>`:''}</td>
-      <td><span class="badge ${p.pago==='efectivo'?'bb':p.pago==='transferencia'?'bpu':'by'}">${p.pago||'efectivo'}</span></td>
-      <td class="mono" style="font-weight:500;color:${p.estado==='entregado'&&p.pago!=='fiado'?'var(--a-d)':p.estado==='pendiente'?'var(--warn)':'var(--danger)'}">
+      <td class="mono" style="font-weight:500">
         ${fmt(p.total)}
-        ${p.pago==='fiado'&&p.estado==='entregado'?`<div style="font-size:10px;color:var(--danger)">Saldo: ${fmt(p.saldo!==undefined?p.saldo:p.total)}</div>`:''}
-        <div style="font-size:10px;color:var(--t3)">${p.estado==='pendiente'?'sin entregar':p.pago==='fiado'&&(p.saldo===undefined||p.saldo>0)?'fiado pendiente':'cobrado'}</div>
+        ${tieneSaldo?`<div style="font-size:10px;color:var(--danger);font-weight:600">Saldo: ${fmt(p.saldo!==undefined?p.saldo:p.total)}</div>`:''}
       </td>
-      <td><span class="badge ${p.estado==='pendiente'?'by':'bg'}">${p.estado==='pendiente'?'Pendiente':'Entregado'}</span></td>
-      <td><div style="display:flex;gap:5px">
+      <td>
+        <span class="badge ${p.estado==='pendiente'?'by':tieneSaldo?'br':'bg'}">
+          ${p.estado==='pendiente'?'Pendiente':tieneSaldo?'Fiado':'Entregado'}
+        </span>
+      </td>
+      <td><div style="display:flex;gap:5px;flex-wrap:wrap">
         <button class="btn bsm" onclick="verDetallePedido('${p._id}')">👁</button>
         <button class="btn bsm" onclick="imprimirPedido('${p._id}')" title="Imprimir">🖨</button>
         ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="confirmarEntrega('${p._id}')" title="Marcar entregado">✓</button>`:''}
-        ${!esVend?`<button class="btn bsm bd" onclick="eliminarPedido('${p._id}')">🗑</button>`:''}
+        ${!esVend&&tieneSaldo?`<button class="btn bsm bp" onclick="abrirAbono('${p._id}','pedido')" title="Registrar abono">💰 Abonar</button>`:''}
+        ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bd" onclick="eliminarPedido('${p._id}')">🗑</button>`:''}
       </div></td>
-    </tr>`).join('')
-    :'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">Sin pedidos</td></tr>';
+    </tr>`;}).join('')
+    :'<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:18px">Sin pedidos</td></tr>';
   updateBadgePedidos();
   // Resumen por vendedor (solo dueño)
   if(!esVend){
@@ -1241,7 +1246,11 @@ window.abrirAbono=function(id, tipo){
       </div>
       ${abonos.length?`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
         <div style="font-size:11px;font-weight:600;color:var(--t2);margin-bottom:4px">Abonos anteriores:</div>
-        ${abonos.map(a=>`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t2);padding:2px 0"><span>${fmtF(a.fecha)} · ${a.met}</span><span>${fmt(a.monto)}</span></div>`).join('')}
+        ${abonos.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)">
+          <span style="color:var(--t2)">${fmtF(a.fecha)}</span>
+          <span class="badge ${a.met==='efectivo'?'bb':a.met==='transferencia'?'bpu':'by'}">${a.met}</span>
+          <span style="font-weight:600">${fmt(a.monto)}</span>
+        </div>`).join('')}
       </div>`:''}
     </div>`;
   document.getElementById('abono-monto').value=saldo;
@@ -1265,17 +1274,24 @@ window.confirmarAbono=async function(){
   // Guardar en Firebase
   const col=tipo==='fiado'?'fiados':'pedidos';
   await guardarDoc(col,id,{saldo:obj.saldo,abonos,estado:obj.estado});
-  // Registrar abono en ventas → entra al cierre del día
-  const vData={fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
-    pago:met,total:monto,items:obj.items||[],
-    esAbono:true,cliente:obj.cliente,pagoCliente:monto,vueltos:0,
-    nota:'Abono '+(tipo==='fiado'?'fiado':'pedido fiado')+': '+obj.cliente};
-  const vId=await agregarDoc('ventas',vData);
-  S.ventas.push({_id:vId,...vData});
+  // Solo entra a caja si el abono es en efectivo o transferencia
+  // Si es "fiado", solo reduce el saldo pero NO entra al cierre del día
+  if(met!=='fiado'){
+    const vData={fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+      pago:met,total:monto,items:obj.items||[],
+      esAbono:true,cliente:obj.cliente,pagoCliente:monto,vueltos:0,
+      nota:'Abono '+(tipo==='fiado'?'fiado':'pedido fiado')+': '+obj.cliente};
+    const vId=await agregarDoc('ventas',vData);
+    S.ventas.push({_id:vId,...vData});
+  }
   cerrarMo('mo-abono');
-  if(tipo==='fiado'){renderFiados(); updateBadge();}
-  else{renderPedidos(); updateBadgePedidos();}
-  toast(yaTermino?'✓ Deuda saldada completamente':'✓ Abono de '+fmt(monto)+' registrado en caja');
+  if(tipo==='fiado'){renderFiados();updateBadge();}
+  else{renderPedidos();updateBadgePedidos();}
+  if(met==='fiado'){
+    toast(yaTermino?'✓ Saldo saldado como fiado':'📋 Abono fiado registrado — no entra a caja aún');
+  } else {
+    toast(yaTermino?'✓ Deuda saldada completamente':'✓ Abono de '+fmt(monto)+' ('+met+') registrado en caja');
+  }
 };
 
 window.imprimirPedido=function(id){
@@ -1648,7 +1664,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <button class="btn bsm" id="fil-entregado" onclick="filtrarPedidos('entregado')">Entregados</button>
           </div>
         </div>
-        <div class="tw"><table><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Pago</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
+        <div class="tw"><table><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
       </div>
       <div id="pedidos-vendedor-resumen"></div>
     </div>
@@ -1781,10 +1797,11 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   <div class="mt2">💰 Registrar abono</div>
   <div id="abono-info"></div>
   <div class="fg mt8"><label class="fl">Monto del abono ($)</label><input class="fi" id="abono-monto" type="number" min="0" placeholder="0"></div>
-  <div class="fg mt8"><label class="fl">Forma de cobro</label>
+  <div class="fg mt8"><label class="fl">Forma de abono</label>
     <select class="fi" id="abono-met">
       <option value="efectivo">💵 Efectivo</option>
       <option value="transferencia">📲 Transferencia</option>
+      <option value="fiado">📋 Fiado (abona con otro fiado)</option>
     </select>
   </div>
   <div class="ma">
