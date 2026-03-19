@@ -965,7 +965,7 @@ function renderPedidos(){
       <td><div style="display:flex;gap:5px">
         <button class="btn bsm" onclick="verDetallePedido('${p._id}')">👁</button>
         <button class="btn bsm" onclick="imprimirPedido('${p._id}')" title="Imprimir">🖨</button>
-        ${p.estado==='pendiente'?`<button class="btn bsm bp" onclick="confirmarEntrega('${p._id}')" title="Marcar entregado">✓</button>`:''}
+        ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="confirmarEntrega('${p._id}')" title="Marcar entregado">✓</button>`:''}
         ${!esVend?`<button class="btn bsm bd" onclick="eliminarPedido('${p._id}')">🗑</button>`:''}
       </div></td>
     </tr>`).join('')
