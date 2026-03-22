@@ -814,7 +814,10 @@ function renderCierre(){
         <td style="font-size:12px;color:var(--t2)">${v.esAbono?'Abono: '+v.cliente:v.esPedido?'Pedido: '+v.cliente:v.items.map(i=>i.nombre+(i.qty>1?' ×'+i.qty:'')).join(', ')}</td>
         <td><span class="badge ${v.pago==='efectivo'?'bb':'bpu'}">${v.pago}</span>${v.esAbono?'<span class="badge by" style="margin-left:4px">abono</span>':''}</td>
         <td class="mono" style="font-weight:500">${fmt(v.total)}</td>
-        <td><button class="btn bsm" onclick="imprimirVentaHistorial('${v._id}')">🖨</button></td></tr>`).join('')}
+        <td><div style="display:flex;gap:4px">
+          <button class="btn bsm" onclick="imprimirVentaHistorial('${v._id}')">🖨</button>
+          ${!v.esAbono&&!v.esPedido?`<button class="btn bsm" onclick="abrirEditarVenta('${v._id}')" title="Editar">✏️</button>`:''}
+        </div></td></tr>`).join('')}
       </tbody></table></div>`:'<div style="color:var(--t3);font-size:13px">Sin ventas para esta fecha</div>'}
     </div>`;}
 window.renderCierre=renderCierre;
@@ -986,8 +989,8 @@ function renderPedidos(){
         ${tieneSaldo?`<div style="font-size:10px;color:var(--danger);font-weight:600">Saldo: ${fmt(p.saldo!==undefined?p.saldo:p.total)}</div>`:''}
       </td>
       <td>
-        <span class="badge ${p.estado==='pendiente'?'by':tieneSaldo?'br':'bg'}">
-          ${p.estado==='pendiente'?'Pendiente':tieneSaldo?'Fiado':'Entregado'}
+        <span class="badge ${p.estado==='pendiente'?'by':p.estado==='cancelado'?'br':tieneSaldo?'br':'bg'}">
+          ${p.estado==='pendiente'?'Pendiente':p.estado==='cancelado'?'Cancelado':tieneSaldo?'Fiado':'Entregado'}
         </span>
       </td>
       <td><div style="display:flex;gap:5px;flex-wrap:wrap">
@@ -995,7 +998,8 @@ function renderPedidos(){
         <button class="btn bsm" onclick="imprimirPedido('${p._id}')" title="Imprimir">🖨</button>
         ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="verDetallePedido('${p._id}')" title="Cobrar pedido">✓ Cobrar</button>`:''}
         ${!esVend&&tieneSaldo?`<button class="btn bsm bp" onclick="abrirAbono('${p._id}','pedido')" title="Registrar abono">💰 Abonar</button>`:''}
-        ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bd" onclick="eliminarPedido('${p._id}')">🗑</button>`:''}
+        ${!esVend&&p.estado!=='cancelado'?`<button class="btn bsm" onclick="abrirEditarPedido('${p._id}')" title="Editar productos">✏️</button>`:''}
+        ${!esVend&&p.estado!=='cancelado'?`<button class="btn bsm bd" onclick="cancelarPedidoCompleto('${p._id}')" title="Cancelar pedido completo">❌</button>`:''}
       </div></td>
     </tr>`;}).join('')
     :'<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:18px">Sin pedidos</td></tr>';
@@ -1385,11 +1389,247 @@ window.eliminarPedido=async function(id){
   renderPedidos(); toast('Pedido eliminado');
 };
 
-// close dropdowns on outside click
+// ══════════════════════════════════════════
+//  EDITAR Y CANCELAR PEDIDOS
+// ══════════════════════════════════════════
+let _editPedidoId=null, _editPedidoItems=[];
+
+window.abrirEditarPedido=function(id){
+  _editPedidoId=id;
+  const p=S.pedidos.find(x=>x._id===id);
+  _editPedidoItems=p.items.map(i=>({...i}));
+  document.getElementById('editar-pedido-info').innerHTML=`
+    <div style="background:var(--s2);border-radius:var(--rs);padding:10px;font-size:13px">
+      <div style="font-weight:600">${p.cliente}</div>
+      <div style="color:var(--t2);font-size:12px">📍 ${p.direccion} · Estado: <strong>${p.estado}</strong></div>
+    </div>`;
+  document.getElementById('editar-ped-search').value='';
+  document.getElementById('editar-ped-results').style.display='none';
+  renderEditarPedidoItems();
+  abrirMo('mo-editar-pedido');
+};
+
+function renderEditarPedidoItems(){
+  const total=_editPedidoItems.reduce((a,i)=>a+i.precio*(i.qty||1),0);
+  document.getElementById('editar-pedido-items').innerHTML=_editPedidoItems.length
+    ?_editPedidoItems.map((it,i)=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;gap:8px">
+        <div style="flex:1"><div style="font-weight:500">${it.nombre}</div><div style="font-size:11px;color:var(--t3)">${fmt(it.precio)} c/u</div></div>
+        <div style="display:flex;align-items:center;gap:5px">
+          <div class="qb" onclick="chgQtyEditPed(${i},-1)">−</div>
+          <span style="font-weight:500;min-width:20px;text-align:center">${it.qty||1}</span>
+          <div class="qb" onclick="chgQtyEditPed(${i},1)">+</div>
+          <span style="min-width:64px;text-align:right;font-weight:500">${fmt(it.precio*(it.qty||1))}</span>
+          <div class="qb" onclick="quitarItemEditPed(${i})" style="color:var(--danger)">×</div>
+        </div>
+      </div>`).join('')
+    :'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin productos</div>';
+  document.getElementById('editar-ped-total').innerHTML=`Total nuevo: <span style="color:var(--a-d)">${fmt(total)}</span>`;
+}
+
+window.chgQtyEditPed=function(i,d){
+  _editPedidoItems[i].qty=(_editPedidoItems[i].qty||1)+d;
+  if(_editPedidoItems[i].qty<=0) _editPedidoItems.splice(i,1);
+  renderEditarPedidoItems();
+};
+window.quitarItemEditPed=function(i){_editPedidoItems.splice(i,1);renderEditarPedidoItems();};
+
+window.buscarProdEditarPed=function(){
+  const q=document.getElementById('editar-ped-search').value.toLowerCase();
+  const res=document.getElementById('editar-ped-results');
+  if(!q){res.style.display='none';return;}
+  const found=S.productos.filter(p=>p.nombre.toLowerCase().includes(q)&&p.stock>0);
+  if(!found.length){res.innerHTML='<div class="pri" style="color:var(--t3)">Sin resultados</div>';res.style.display='block';return;}
+  res.innerHTML=found.map(p=>`<div class="pri" onclick="agregarProdEditarPed('${p._id}')"><span>${p.nombre}</span><span style="color:var(--a-d);font-weight:500;font-size:12px">${fmt(p.venta)}</span></div>`).join('');
+  res.style.display='block';
+};
+
+window.agregarProdEditarPed=function(id){
+  const p=S.productos.find(x=>x._id===id);
+  const ex=_editPedidoItems.find(i=>i._id===id);
+  if(ex) ex.qty=(ex.qty||1)+1;
+  else _editPedidoItems.push({_id:p._id,nombre:p.nombre,precio:p.venta,qty:1,tipo:p.tipo||'unidad'});
+  document.getElementById('editar-ped-search').value='';
+  document.getElementById('editar-ped-results').style.display='none';
+  renderEditarPedidoItems();
+};
+
+window.guardarEditarPedido=async function(){
+  if(!_editPedidoItems.length){toast('El pedido no puede quedar sin productos',false);return;}
+  const p=S.pedidos.find(x=>x._id===_editPedidoId);
+  const itemsOld=p.items||[];
+  const itemsNew=_editPedidoItems;
+  const totalNew=itemsNew.reduce((a,i)=>a+i.precio*(i.qty||1),0);
+
+  // Devolver stock de items quitados o reducidos
+  for(const old of itemsOld){
+    const nuevo=itemsNew.find(i=>i._id===old._id);
+    const qtyOld=old.qty||1;
+    const qtyNew=nuevo?nuevo.qty||1:0;
+    const diff=qtyOld-qtyNew; // cuánto se devuelve
+    if(diff>0){
+      const prod=S.productos.find(x=>x._id===old._id);
+      if(prod){prod.stock+=diff;await guardarDoc('productos',prod._id,{stock:prod.stock});}
+    }
+  }
+  // Descontar stock de items nuevos agregados
+  for(const nw of itemsNew){
+    const viejo=itemsOld.find(i=>i._id===nw._id);
+    const qtyNew=nw.qty||1;
+    const qtyOld=viejo?viejo.qty||1:0;
+    const diff=qtyNew-qtyOld; // cuánto se agrega
+    if(diff>0){
+      const prod=S.productos.find(x=>x._id===nw._id);
+      if(prod){prod.stock=Math.max(0,prod.stock-diff);await guardarDoc('productos',prod._id,{stock:prod.stock});}
+    }
+  }
+
+  // Actualizar pedido
+  p.items=itemsNew; p.total=totalNew;
+  await guardarDoc('pedidos',_editPedidoId,{items:itemsNew,total:totalNew});
+
+  // Si ya estaba entregado y cobrado, actualizar la venta correspondiente
+  if(p.estado==='entregado'&&p.pago!=='fiado'){
+    const venta=S.ventas.find(v=>v.esPedido&&v.cliente===p.cliente&&v.total===p.total);
+    if(venta){venta.items=itemsNew;venta.total=totalNew;await guardarDoc('ventas',venta._id,{items:itemsNew,total:totalNew});}
+  }
+
+  cerrarMo('mo-editar-pedido');renderPedidos();
+  toast('Pedido actualizado — nuevo total: '+fmt(totalNew));
+};
+
+window.cancelarPedidoCompleto=async function(id){
+  if(!confirm('¿Cancelar este pedido? Todos los productos volverán al inventario.'))return;
+  const p=S.pedidos.find(x=>x._id===id);
+  // Devolver todo el stock
+  for(const it of p.items||[]){
+    const prod=S.productos.find(x=>x._id===it._id);
+    if(prod){
+      const qty=it.tipo==='granel'?it.cantGranel||0:it.qty||1;
+      prod.stock+=qty;
+      await guardarDoc('productos',prod._id,{stock:prod.stock});
+    }
+  }
+  // Si ya estaba entregado y cobrado, restar de ventas
+  if(p.estado==='entregado'&&p.pago!=='fiado'){
+    const venta=S.ventas.find(v=>v.esPedido&&v.cliente===p.cliente);
+    if(venta){
+      S.ventas=S.ventas.filter(v=>v._id!==venta._id);
+      await borrarDoc('ventas',venta._id);
+    }
+  }
+  p.estado='cancelado';
+  await guardarDoc('pedidos',id,{estado:'cancelado'});
+  renderPedidos();updateBadgePedidos();
+  toast('Pedido cancelado — stock devuelto al inventario');
+};
+
+// ══════════════════════════════════════════
+//  EDITAR VENTAS DE TIENDA
+// ══════════════════════════════════════════
+let _editVentaId=null, _editVentaItems=[];
+
+window.abrirEditarVenta=function(id){
+  _editVentaId=id;
+  const v=S.ventas.find(x=>x._id===id);
+  _editVentaItems=v.items.map(i=>({...i}));
+  document.getElementById('editar-venta-info').innerHTML=`
+    <div style="background:var(--s2);border-radius:var(--rs);padding:10px;font-size:13px">
+      <div style="font-weight:600">${v.hora||'--:--'} · <span class="badge ${v.pago==='efectivo'?'bb':'bpu'}">${v.pago}</span></div>
+      <div style="color:var(--t2);font-size:12px">Total original: <strong>${fmt(v.total)}</strong></div>
+    </div>`;
+  document.getElementById('editar-venta-search').value='';
+  document.getElementById('editar-venta-results').style.display='none';
+  renderEditarVentaItems();
+  abrirMo('mo-editar-venta');
+};
+
+function renderEditarVentaItems(){
+  const total=_editVentaItems.reduce((a,i)=>a+i.precio*(i.qty||1),0);
+  document.getElementById('editar-venta-items').innerHTML=_editVentaItems.length
+    ?_editVentaItems.map((it,i)=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;gap:8px">
+        <div style="flex:1"><div style="font-weight:500">${it.nombre}</div><div style="font-size:11px;color:var(--t3)">${fmt(it.precio)} c/u</div></div>
+        <div style="display:flex;align-items:center;gap:5px">
+          <div class="qb" onclick="chgQtyEditVenta(${i},-1)">−</div>
+          <span style="font-weight:500;min-width:20px;text-align:center">${it.qty||1}</span>
+          <div class="qb" onclick="chgQtyEditVenta(${i},1)">+</div>
+          <span style="min-width:64px;text-align:right;font-weight:500">${fmt(it.precio*(it.qty||1))}</span>
+          <div class="qb" onclick="quitarItemEditVenta(${i})" style="color:var(--danger)">×</div>
+        </div>
+      </div>`).join('')
+    :'<div style="color:var(--t3);font-size:13px;padding:8px 0">Sin productos — la venta quedará en $0</div>';
+  document.getElementById('editar-venta-total').innerHTML=`Nuevo total: <span style="color:var(--a-d)">${fmt(total)}</span>`;
+}
+
+window.chgQtyEditVenta=function(i,d){
+  _editVentaItems[i].qty=(_editVentaItems[i].qty||1)+d;
+  if(_editVentaItems[i].qty<=0) _editVentaItems.splice(i,1);
+  renderEditarVentaItems();
+};
+window.quitarItemEditVenta=function(i){_editVentaItems.splice(i,1);renderEditarVentaItems();};
+
+window.buscarProdEditarVenta=function(){
+  const q=document.getElementById('editar-venta-search').value.toLowerCase();
+  const res=document.getElementById('editar-venta-results');
+  if(!q){res.style.display='none';return;}
+  const found=S.productos.filter(p=>p.nombre.toLowerCase().includes(q));
+  if(!found.length){res.innerHTML='<div class="pri" style="color:var(--t3)">Sin resultados</div>';res.style.display='block';return;}
+  res.innerHTML=found.map(p=>`<div class="pri" onclick="agregarProdEditarVenta('${p._id}')"><span>${p.nombre}</span><span style="color:var(--a-d);font-weight:500;font-size:12px">${fmt(p.venta)}</span></div>`).join('');
+  res.style.display='block';
+};
+
+window.agregarProdEditarVenta=function(id){
+  const p=S.productos.find(x=>x._id===id);
+  const ex=_editVentaItems.find(i=>i._id===id);
+  if(ex) ex.qty=(ex.qty||1)+1;
+  else _editVentaItems.push({_id:p._id,nombre:p.nombre,precio:p.venta,qty:1,tipo:p.tipo||'unidad'});
+  document.getElementById('editar-venta-search').value='';
+  document.getElementById('editar-venta-results').style.display='none';
+  renderEditarVentaItems();
+};
+
+window.guardarEditarVenta=async function(){
+  const v=S.ventas.find(x=>x._id===_editVentaId);
+  const itemsOld=v.items||[];
+  const itemsNew=_editVentaItems;
+  const totalNew=itemsNew.reduce((a,i)=>a+i.precio*(i.qty||1),0);
+
+  // Devolver stock de items quitados o reducidos
+  for(const old of itemsOld){
+    const nuevo=itemsNew.find(i=>i._id===old._id);
+    const qtyOld=old.qty||1;
+    const qtyNew=nuevo?nuevo.qty||1:0;
+    const diff=qtyOld-qtyNew;
+    if(diff>0){
+      const prod=S.productos.find(x=>x._id===old._id);
+      if(prod){prod.stock+=diff;await guardarDoc('productos',prod._id,{stock:prod.stock});}
+    }
+  }
+  // Descontar stock de items nuevos
+  for(const nw of itemsNew){
+    const viejo=itemsOld.find(i=>i._id===nw._id);
+    const qtyNew=nw.qty||1;
+    const qtyOld=viejo?viejo.qty||1:0;
+    const diff=qtyNew-qtyOld;
+    if(diff>0){
+      const prod=S.productos.find(x=>x._id===nw._id);
+      if(prod){prod.stock=Math.max(0,prod.stock-diff);await guardarDoc('productos',prod._id,{stock:prod.stock});}
+    }
+  }
+
+  // Actualizar venta
+  v.items=itemsNew; v.total=totalNew;
+  await guardarDoc('ventas',_editVentaId,{items:itemsNew,total:totalNew});
+  cerrarMo('mo-editar-venta');
+  renderCierre();
+  toast('Venta actualizada — nuevo total: '+fmt(totalNew));
+};
 document.addEventListener('click',e=>{
   if(!e.target.closest('.pos-wrap')){
-    document.getElementById('v-results').style.display='none';
-    const pr=document.getElementById('ped-results');if(pr)pr.style.display='none';
+    ['v-results','ped-results','editar-ped-results','editar-venta-results'].forEach(id=>{
+      const el=document.getElementById(id);if(el)el.style.display='none';
+    });
   }
 });
 </script>
@@ -1789,6 +2029,44 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     <button class="btn" onclick="cerrarMo('mo-detalle-pedido')">Cerrar</button>
     <button class="btn" id="btn-abono-pedido" onclick="abrirAbonoPedido()" style="display:none">💰 Registrar abono</button>
     <button class="btn bp" id="btn-entregar-pedido" onclick="entregarPedido()">💰 Cobrar y cerrar pedido</button>
+  </div>
+</div></div>
+
+<!-- MODAL EDITAR PEDIDO -->
+<div class="mo" id="mo-editar-pedido"><div class="md" style="width:520px">
+  <div class="mt2">✏️ Editar pedido</div>
+  <div id="editar-pedido-info" style="margin-bottom:12px"></div>
+  <div style="font-weight:600;font-size:13px;margin-bottom:8px">Productos del pedido</div>
+  <div id="editar-pedido-items"></div>
+  <div class="divider"></div>
+  <div style="font-weight:600;font-size:13px;margin-bottom:8px">Agregar producto</div>
+  <div class="pos-wrap" style="margin-bottom:10px">
+    <input class="fi" id="editar-ped-search" placeholder="Buscar producto..." oninput="buscarProdEditarPed()" autocomplete="off">
+    <div class="pr" id="editar-ped-results" style="display:none"></div>
+  </div>
+  <div id="editar-ped-total" style="font-size:14px;font-weight:600;text-align:right;padding:8px 0;border-top:2px solid var(--border)"></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-editar-pedido')">Cancelar</button>
+    <button class="btn bp" onclick="guardarEditarPedido()">✓ Guardar cambios</button>
+  </div>
+</div></div>
+
+<!-- MODAL EDITAR VENTA -->
+<div class="mo" id="mo-editar-venta"><div class="md" style="width:520px">
+  <div class="mt2">✏️ Editar venta</div>
+  <div id="editar-venta-info" style="margin-bottom:12px"></div>
+  <div style="font-weight:600;font-size:13px;margin-bottom:8px">Productos de la venta</div>
+  <div id="editar-venta-items"></div>
+  <div class="divider"></div>
+  <div style="font-weight:600;font-size:13px;margin-bottom:8px">Agregar producto</div>
+  <div class="pos-wrap" style="margin-bottom:10px">
+    <input class="fi" id="editar-venta-search" placeholder="Buscar producto..." oninput="buscarProdEditarVenta()" autocomplete="off">
+    <div class="pr" id="editar-venta-results" style="display:none"></div>
+  </div>
+  <div id="editar-venta-total" style="font-size:14px;font-weight:600;text-align:right;padding:8px 0;border-top:2px solid var(--border)"></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-editar-venta')">Cancelar</button>
+    <button class="btn bp" onclick="guardarEditarVenta()">✓ Guardar cambios</button>
   </div>
 </div></div>
 
