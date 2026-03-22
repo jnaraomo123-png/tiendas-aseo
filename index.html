@@ -793,12 +793,18 @@ function renderCierre(){
   const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado');
   const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
   const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
-  // Abonos del día (ya están en ventas como esAbono:true)
   const abonosEf=vd.filter(v=>v.esAbono&&v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
   const abonosTr=vd.filter(v=>v.esAbono&&v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
   const fpend=S.fiados.filter(f=>f.estado==='pendiente').reduce((a,f)=>a+(f.saldo!==undefined?f.saldo:f.total),0);
-  const fhoy=S.fiados.filter(f=>f.fecha===fecha).reduce((a,f)=>a+f.total,0);
   const pedFiados=S.pedidos.filter(p=>p.pago==='fiado'&&(p.saldo===undefined||p.saldo>0)).reduce((a,p)=>a+(p.saldo!==undefined?p.saldo:p.total),0);
+  // Gastos del día pagados en efectivo o transferencia (no crédito)
+  const gastosDia=S.gastos.filter(g=>g.fecha===fecha&&g.pago!=='credito');
+  const gastosEf=gastosDia.filter(g=>g.pago==='efectivo').reduce((a,g)=>a+g.monto,0);
+  const gastosTr=gastosDia.filter(g=>g.pago==='transferencia').reduce((a,g)=>a+g.monto,0);
+  const totalGastos=gastosEf+gastosTr;
+  const totalCobrado=ef+tr;
+  const cajaFinal=totalCobrado-totalGastos;
+
   document.getElementById('cierre-content').innerHTML=`
     <div class="alert ai">📅 Cierre del ${fmtF(fecha)} — Los fiados NO cuentan hasta ser cobrados o abonados.</div>
     <div class="cg">
@@ -807,14 +813,29 @@ function renderCierre(){
         <div class="cr"><span>Transferencias ventas</span><span class="mono" style="color:var(--purple)">${fmt(tr-abonosTr)}</span></div>
         ${abonosEf+abonosTr>0?`<div class="cr"><span>Abonos fiados (efectivo)</span><span class="mono" style="color:var(--info)">${fmt(abonosEf)}</span></div>
         <div class="cr"><span>Abonos fiados (transfer.)</span><span class="mono" style="color:var(--purple)">${fmt(abonosTr)}</span></div>`:''}
-        <div class="cr tot"><span>Total cobrado</span><span class="mono" style="color:var(--a-d)">${fmt(ef+tr)}</span></div>
+        <div class="cr tot"><span>Total cobrado</span><span class="mono" style="color:var(--a-d)">${fmt(totalCobrado)}</span></div>
       </div>
-      <div class="cb"><div style="font-weight:600;font-size:14px;margin-bottom:11px">📋 Pendiente de cobro</div>
-        <div class="cr"><span>Fiados tienda</span><span class="mono" style="color:var(--warn)">${fmt(fpend)}</span></div>
-        <div class="cr"><span>Pedidos fiados</span><span class="mono" style="color:var(--warn)">${fmt(pedFiados)}</span></div>
-        <div class="cr tot"><span>Total pendiente</span><span class="mono" style="color:var(--danger)">${fmt(fpend+pedFiados)}</span></div>
+      <div class="cb"><div style="font-weight:600;font-size:14px;margin-bottom:11px">💸 Gastos pagados hoy</div>
+        ${gastosEf>0?`<div class="cr"><span>Efectivo</span><span class="mono" style="color:var(--danger)">- ${fmt(gastosEf)}</span></div>`:''}
+        ${gastosTr>0?`<div class="cr"><span>Transferencia</span><span class="mono" style="color:var(--danger)">- ${fmt(gastosTr)}</span></div>`:''}
+        ${totalGastos===0?`<div class="cr"><span style="color:var(--t3)">Sin gastos hoy</span><span></span></div>`:''}
+        <div class="cr tot"><span>Total gastos</span><span class="mono" style="color:var(--danger)">${fmt(totalGastos)}</span></div>
+        <div style="margin-top:10px;background:${cajaFinal>=0?'var(--a-l)':'var(--danger-l)'};border-radius:var(--rs);padding:10px;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:600;font-size:13px">💰 Saldo en caja</span>
+          <span class="mono" style="font-weight:700;font-size:16px;color:${cajaFinal>=0?'var(--a-d)':'var(--danger)'}">${fmt(cajaFinal)}</span>
+        </div>
       </div>
     </div>
+    ${gastosDia.length?`<div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">💸 Detalle de gastos del día</div>
+      <div class="tw"><table><thead><tr><th>Tipo</th><th>Descripción</th><th>Pago</th><th>Monto</th></tr></thead><tbody>
+        ${gastosDia.map(g=>`<tr>
+          <td><span class="badge bb">${TIPOS_GASTO[g.tipo]||g.tipo}</span></td>
+          <td style="font-size:12px;color:var(--t2)">${g.descripcion||'—'}${g.proveedorNombre?`<div style="font-size:10px;color:var(--purple)">🏭 ${g.proveedorNombre}</div>`:''}</td>
+          <td><span class="badge ${g.pago==='efectivo'?'bb':'bpu'}">${g.pago}</span></td>
+          <td class="mono" style="font-weight:500;color:var(--danger)">- ${fmt(g.monto)}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`:''}
     <div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">Detalle de ventas</div>
       ${vd.length?`<div class="tw"><table><thead><tr><th>Hora</th><th>Detalle</th><th>Pago</th><th>Monto</th><th></th></tr></thead><tbody>
         ${vd.map(v=>`<tr><td class="mono" style="font-size:12px">${v.hora||'—'}</td>
@@ -826,6 +847,14 @@ function renderCierre(){
           ${!v.esAbono&&!v.esPedido?`<button class="btn bsm" onclick="abrirEditarVenta('${v._id}')" title="Editar">✏️</button>`:''}
         </div></td></tr>`).join('')}
       </tbody></table></div>`:'<div style="color:var(--t3);font-size:13px">Sin ventas para esta fecha</div>'}
+    </div>
+    <div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">📋 Pendiente de cobro</div>
+      <div class="cg">
+        <div class="cb"><div class="cr"><span>Fiados tienda</span><span class="mono" style="color:var(--warn)">${fmt(fpend)}</span></div>
+        <div class="cr tot"><span>Total fiados</span><span class="mono" style="color:var(--danger)">${fmt(fpend)}</span></div></div>
+        <div class="cb"><div class="cr"><span>Pedidos fiados</span><span class="mono" style="color:var(--warn)">${fmt(pedFiados)}</span></div>
+        <div class="cr tot"><span>Total pedidos fiados</span><span class="mono" style="color:var(--danger)">${fmt(pedFiados)}</span></div></div>
+      </div>
     </div>`;}
 window.renderCierre=renderCierre;
 
