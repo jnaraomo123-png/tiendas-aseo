@@ -68,6 +68,7 @@ let S = {
     vendedores:[]},
   editProd:null, cobrandoId:null, granelProdId:null, granelMode:'valor',
   _ventaPendiente:null, rol:'dueno',
+  gastos:[], proveedores:[],
 };
 
 // ══════════════════════════════════════════
@@ -76,16 +77,18 @@ let S = {
 async function cargarDatos() {
   mostrarCargando(true);
   try {
-    const [prods, ventas, fiados, pedidos, cfgSnap] = await Promise.all([
+    const [prods, ventas, fiados, pedidos, gastos, proveedores, cfgSnap] = await Promise.all([
       leerCol('productos'), leerCol('ventas'), leerCol('fiados'),
-      leerCol('pedidos'), getDoc(cfgDoc())
+      leerCol('pedidos'), leerCol('gastos'), leerCol('proveedores'),
+      getDoc(cfgDoc())
     ]);
-    S.productos = prods;
-    S.ventas    = ventas;
-    S.fiados    = fiados;
-    S.pedidos   = pedidos;
+    S.productos   = prods;
+    S.ventas      = ventas;
+    S.fiados      = fiados;
+    S.pedidos     = pedidos;
+    S.gastos      = gastos;
+    S.proveedores = proveedores;
     if (cfgSnap.exists()) S.config = { ...S.config, ...cfgSnap.data() };
-    // Determinar rol del usuario
     const email = auth.currentUser?.email||'';
     const vendedores = S.config.vendedores||[];
     S.rol = vendedores.includes(email) ? 'vendedor' : 'dueno';
@@ -97,7 +100,7 @@ async function cargarDatos() {
 function aplicarRol() {
   const esVendedor = S.rol === 'vendedor';
   // Ocultar secciones según rol
-  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-reporte','nav-config'];
+  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-reporte','nav-config','nav-gastos','nav-proveedores'];
   solodueno.forEach(id => {
     const el = document.getElementById(id);
     if(el) el.style.display = esVendedor ? 'none' : 'flex';
@@ -169,6 +172,8 @@ window.goTo = function(p) {
   if(p==='fiados') renderFiados();
   if(p==='caja') { document.getElementById('caja-fecha').value=hoy(); renderCierre(); }
   if(p==='reporte') initReporte();
+  if(p==='gastos') initGastos();
+  if(p==='proveedores') renderProveedores();
   if(p==='config') renderConfig();
   if(p==='pedidos') renderPedidos();
 };
@@ -1656,6 +1661,209 @@ window.guardarEditarVenta=async function(){
   renderCierre();
   toast('Venta actualizada — nuevo total: '+fmt(totalNew));
 };
+// ══════════════════════════════════════════
+//  GASTOS
+// ══════════════════════════════════════════
+const TIPOS_GASTO={arriendo:'🏠 Arriendo',servicios:'💡 Servicios',salario:'👤 Salario',compra:'📦 Compra productos',transporte:'🚗 Transporte',varios:'📝 Varios'};
+
+function initGastos(){
+  const meses=new Set();
+  S.gastos.forEach(g=>meses.add(g.fecha.substring(0,7)));
+  const mesActual=hoy().substring(0,7);
+  meses.add(mesActual);
+  const sel=document.getElementById('gastos-mes');
+  const ord=[...meses].sort((a,b)=>b.localeCompare(a));
+  sel.innerHTML=ord.map(m=>{
+    const [y,mo]=m.split('-');
+    const nombre=new Date(y,parseInt(mo)-1).toLocaleDateString('es-CO',{month:'long',year:'numeric'});
+    return `<option value="${m}" ${m===mesActual?'selected':''}>${nombre}</option>`;
+  }).join('');
+  renderGastos();
+}
+window.initGastos=initGastos;
+
+window.renderGastos=function(){
+  const mes=document.getElementById('gastos-mes').value||hoy().substring(0,7);
+  const gm=S.gastos.filter(g=>g.fecha.startsWith(mes));
+  const totales={};
+  gm.forEach(g=>{totales[g.tipo]=(totales[g.tipo]||0)+g.monto;});
+  const totalMes=gm.reduce((a,g)=>a+g.monto,0);
+  const ventasMes=S.ventas.filter(v=>v.fecha.startsWith(mes)&&v.pago!=='fiado');
+  const totalVentasMes=ventasMes.reduce((a,v)=>a+v.total,0);
+  const utilidad=totalVentasMes-totalMes;
+  document.getElementById('gastos-stats').innerHTML=`
+    <div class="sc"><div class="sc-label">Total gastos mes</div><div class="sc-val o">${fmt(totalMes)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${gm.length} registros</div></div>
+    <div class="sc"><div class="sc-label">Ventas del mes</div><div class="sc-val g">${fmt(totalVentasMes)}</div></div>
+    <div class="sc"><div class="sc-label">Utilidad del mes</div><div class="sc-val ${utilidad>=0?'g':'o'}">${fmt(utilidad)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${utilidad>=0?'✓ ganancia':'⚠ pérdida'}</div></div>
+    ${Object.entries(totales).map(([t,v])=>`<div class="sc"><div class="sc-label">${TIPOS_GASTO[t]||t}</div><div class="sc-val" style="font-size:16px">${fmt(v)}</div></div>`).join('')}`;
+  document.getElementById('gastos-tbody').innerHTML=gm.length
+    ?[...gm].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(g=>`
+      <tr>
+        <td style="font-size:12px">${fmtF(g.fecha)}</td>
+        <td><span class="badge bb">${TIPOS_GASTO[g.tipo]||g.tipo}</span></td>
+        <td style="font-size:12px;color:var(--t2)">${g.descripcion||'—'}${g.proveedorNombre?`<div style="font-size:10px;color:var(--purple)">🏭 ${g.proveedorNombre}</div>`:''}</td>
+        <td class="mono" style="font-weight:500;color:var(--danger)">${fmt(g.monto)}<div style="font-size:10px;color:var(--t3)">${g.pago}</div></td>
+        <td><button class="btn bsm bd" onclick="eliminarGasto('${g._id}')">🗑</button></td>
+      </tr>`).join('')
+    :'<tr><td colspan="5" style="text-align:center;color:var(--t3);padding:18px">Sin gastos este mes</td></tr>';
+};
+
+window.abrirModalGasto=function(){
+  document.getElementById('gasto-fecha').value=hoy();
+  document.getElementById('gasto-monto').value='';
+  document.getElementById('gasto-desc').value='';
+  document.getElementById('gasto-tipo').value='arriendo';
+  document.getElementById('gasto-pago').value='efectivo';
+  const sel=document.getElementById('gasto-proveedor');
+  sel.innerHTML='<option value="">Sin proveedor</option>'+S.proveedores.map(p=>`<option value="${p._id}">${p.nombre}</option>`).join('');
+  abrirMo('mo-gasto');
+};
+
+window.guardarGasto=async function(){
+  const monto=parseFloat(document.getElementById('gasto-monto').value)||0;
+  if(!monto){toast('Ingresa el monto del gasto',false);return;}
+  const provId=document.getElementById('gasto-proveedor').value;
+  const prov=S.proveedores.find(p=>p._id===provId);
+  const data={tipo:document.getElementById('gasto-tipo').value,
+    fecha:document.getElementById('gasto-fecha').value||hoy(),
+    descripcion:document.getElementById('gasto-desc').value.trim(),
+    monto,pago:document.getElementById('gasto-pago').value,
+    proveedorId:provId||'',proveedorNombre:prov?prov.nombre:''};
+  const id=await agregarDoc('gastos',data);
+  S.gastos.push({_id:id,...data});
+  if(data.pago==='credito'&&prov){
+    prov.deuda=(prov.deuda||0)+monto;
+    await guardarDoc('proveedores',prov._id,{deuda:prov.deuda});
+  }
+  cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
+};
+
+window.eliminarGasto=async function(id){
+  if(!confirm('¿Eliminar este gasto?'))return;
+  await borrarDoc('gastos',id);
+  S.gastos=S.gastos.filter(g=>g._id!==id);
+  renderGastos(); toast('Gasto eliminado');
+};
+
+// ══════════════════════════════════════════
+//  PROVEEDORES
+// ══════════════════════════════════════════
+let _editProvId=null;
+
+function renderProveedores(){
+  const cont=document.getElementById('proveedores-content');
+  if(!S.proveedores.length){
+    cont.innerHTML='<div class="card" style="text-align:center;padding:32px;color:var(--t3)">No hay proveedores. Agrega el primero con el botón de arriba.</div>';
+    return;
+  }
+  const totalDeuda=S.proveedores.reduce((a,p)=>a+(p.deuda||0),0);
+  cont.innerHTML=`
+    <div class="stats-grid" style="margin-bottom:16px">
+      <div class="sc"><div class="sc-label">Total proveedores</div><div class="sc-val">${S.proveedores.length}</div></div>
+      <div class="sc"><div class="sc-label">Total deuda</div><div class="sc-val o">${fmt(totalDeuda)}</div></div>
+      <div class="sc"><div class="sc-label">Con deuda</div><div class="sc-val o">${S.proveedores.filter(p=>(p.deuda||0)>0).length}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">
+      ${S.proveedores.map(p=>`
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+            <div><div style="font-weight:600;font-size:15px">🏭 ${p.nombre}</div>${p.contacto?`<div style="font-size:12px;color:var(--t2)">👤 ${p.contacto}</div>`:''}</div>
+            <div style="display:flex;gap:5px">
+              <button class="btn bsm" onclick="editarProveedor('${p._id}')">✏️</button>
+              <button class="btn bsm bd" onclick="eliminarProveedor('${p._id}')">🗑</button>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--t2);display:flex;flex-direction:column;gap:3px;margin-bottom:10px">
+            ${p.telefono?`<span>📞 ${p.telefono}</span>`:''}
+            ${p.dias?`<span>📅 Visita: ${p.dias}</span>`:''}
+            ${p.productos?`<span>📦 ${p.productos}</span>`:''}
+          </div>
+          <div style="background:var(--s2);border-radius:var(--rs);padding:10px;display:flex;justify-content:space-between;align-items:center">
+            <div><div style="font-size:11px;color:var(--t3)">Deuda pendiente</div>
+            <div style="font-size:16px;font-weight:600;color:${(p.deuda||0)>0?'var(--danger)':'var(--a-d)'}">${fmt(p.deuda||0)}</div></div>
+            ${(p.deuda||0)>0?`<button class="btn bsm bp" onclick="abrirPagarProveedor('${p._id}')">💰 Pagar</button>`:'<span class="badge bg">Al día ✓</span>'}
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+window.renderProveedores=renderProveedores;
+
+window.abrirModalProveedor=function(){
+  _editProvId=null;
+  ['prov-nombre','prov-tel','prov-contacto','prov-dias','prov-productos'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('prov-deuda').value='0';
+  document.getElementById('mo-prov-title').textContent='Agregar proveedor';
+  abrirMo('mo-proveedor');
+};
+
+window.editarProveedor=function(id){
+  _editProvId=id;
+  const p=S.proveedores.find(x=>x._id===id);
+  document.getElementById('prov-nombre').value=p.nombre||'';
+  document.getElementById('prov-tel').value=p.telefono||'';
+  document.getElementById('prov-contacto').value=p.contacto||'';
+  document.getElementById('prov-dias').value=p.dias||'';
+  document.getElementById('prov-productos').value=p.productos||'';
+  document.getElementById('prov-deuda').value=p.deuda||0;
+  document.getElementById('mo-prov-title').textContent='Editar proveedor';
+  abrirMo('mo-proveedor');
+};
+
+window.guardarProveedor=async function(){
+  const nombre=document.getElementById('prov-nombre').value.trim();
+  if(!nombre){toast('Ingresa el nombre del proveedor',false);return;}
+  const data={nombre,telefono:document.getElementById('prov-tel').value.trim(),
+    contacto:document.getElementById('prov-contacto').value.trim(),
+    dias:document.getElementById('prov-dias').value.trim(),
+    productos:document.getElementById('prov-productos').value.trim(),
+    deuda:parseFloat(document.getElementById('prov-deuda').value)||0,pagos:[]};
+  if(_editProvId){
+    await guardarDoc('proveedores',_editProvId,data);
+    const i=S.proveedores.findIndex(p=>p._id===_editProvId);
+    S.proveedores[i]={...S.proveedores[i],...data};toast('Proveedor actualizado');
+  } else {
+    const id=await agregarDoc('proveedores',data);
+    S.proveedores.push({_id:id,...data});toast('Proveedor agregado');
+  }
+  cerrarMo('mo-proveedor'); renderProveedores();
+};
+
+window.eliminarProveedor=async function(id){
+  if(!confirm('¿Eliminar este proveedor?'))return;
+  await borrarDoc('proveedores',id);
+  S.proveedores=S.proveedores.filter(p=>p._id!==id);
+  renderProveedores(); toast('Proveedor eliminado');
+};
+
+window.abrirPagarProveedor=function(id){
+  const p=S.proveedores.find(x=>x._id===id);
+  window._pagarProvId=id;
+  document.getElementById('pagar-prov-info').innerHTML=`
+    <div style="background:var(--s2);border-radius:var(--rs);padding:11px;margin-bottom:10px">
+      <div style="font-weight:600">${p.nombre}</div>
+      <div style="font-size:13px;margin-top:4px">Deuda: <strong style="color:var(--danger)">${fmt(p.deuda||0)}</strong></div>
+    </div>`;
+  document.getElementById('pagar-prov-monto').value=p.deuda||0;
+  abrirMo('mo-pagar-prov');
+};
+
+window.confirmarPagoProveedor=async function(){
+  const p=S.proveedores.find(x=>x._id===window._pagarProvId);
+  const monto=parseFloat(document.getElementById('pagar-prov-monto').value)||0;
+  const met=document.getElementById('pagar-prov-met').value;
+  if(!monto||monto<=0){toast('Ingresa un monto válido',false);return;}
+  if(monto>(p.deuda||0)){toast('El monto supera la deuda',false);return;}
+  const nuevaDeuda=Math.max(0,(p.deuda||0)-monto);
+  const pagos=[...(p.pagos||[]),{fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),monto,met}];
+  p.deuda=nuevaDeuda; p.pagos=pagos;
+  await guardarDoc('proveedores',p._id,{deuda:nuevaDeuda,pagos});
+  const gData={tipo:'varios',fecha:hoy(),descripcion:'Pago a proveedor: '+p.nombre,monto,pago:met,proveedorId:p._id,proveedorNombre:p.nombre};
+  const gId=await agregarDoc('gastos',gData);
+  S.gastos.push({_id:gId,...gData});
+  cerrarMo('mo-pagar-prov'); renderProveedores();
+  toast('Pago de '+fmt(monto)+' registrado a '+p.nombre);
+};
+
 document.addEventListener('click',e=>{
   if(!e.target.closest('.pos-wrap')){
     ['v-results','ped-results','editar-ped-results','editar-venta-results'].forEach(id=>{
@@ -1810,6 +2018,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
       <div class="nav-item" data-page="fiados" id="nav-fiados" onclick="goTo('fiados')"><span>📋</span> Fiados <span class="nav-badge" id="badge-fiados" style="display:none">0</span></div>
       <div class="nav-item" id="nav-caja" data-page="caja" onclick="goTo('caja')"><span>💰</span> Cierre de Caja</div>
       <div class="nav-item" id="nav-reporte" data-page="reporte" onclick="goTo('reporte')"><span>📈</span> Reportes</div>
+      <div class="nav-item" id="nav-gastos" data-page="gastos" onclick="goTo('gastos')"><span>💸</span> Gastos</div>
+      <div class="nav-item" id="nav-proveedores" data-page="proveedores" onclick="goTo('proveedores')"><span>🏭</span> Proveedores</div>
       <div class="nav-item" id="nav-config" data-page="config" onclick="goTo('config')"><span>⚙️</span> Mi negocio</div>
     </nav>
     <div class="sidebar-foot">
@@ -1895,6 +2105,28 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
         <div style="display:flex;gap:8px;align-items:center"><select class="fi" id="rep-semana" onchange="renderReporte()" style="width:220px"></select><button class="btn bp" onclick="exportarExcel()">⬇ Excel</button></div>
       </div>
       <div id="reporte-content"></div>
+    </div>
+
+    <!-- GASTOS -->
+    <div class="page" id="page-gastos">
+      <div class="ph">
+        <div><div class="pt">Gastos</div><div class="ps">Registro de gastos del negocio</div></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="fi" id="gastos-mes" onchange="renderGastos()" style="width:180px"></select>
+          <button class="btn bp" onclick="abrirModalGasto()">+ Registrar gasto</button>
+        </div>
+      </div>
+      <div class="stats-grid" id="gastos-stats"></div>
+      <div class="card"><div class="tw"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Monto</th><th>Acciones</th></tr></thead><tbody id="gastos-tbody"></tbody></table></div></div>
+    </div>
+
+    <!-- PROVEEDORES -->
+    <div class="page" id="page-proveedores">
+      <div class="ph">
+        <div><div class="pt">Proveedores</div><div class="ps">Empresas a las que le compra</div></div>
+        <button class="btn bp" onclick="abrirModalProveedor()">+ Agregar proveedor</button>
+      </div>
+      <div id="proveedores-content"></div>
     </div>
 
     <div class="page" id="page-config">
@@ -2099,6 +2331,80 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   <div class="ma">
     <button class="btn" onclick="cerrarMo('mo-editar-venta')">Cancelar</button>
     <button class="btn bp" onclick="guardarEditarVenta()">✓ Guardar cambios</button>
+  </div>
+</div></div>
+
+<!-- MODAL GASTO -->
+<div class="mo" id="mo-gasto"><div class="md" style="width:420px">
+  <div class="mt2" id="mo-gasto-title">Registrar gasto</div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Tipo de gasto *</label>
+      <select class="fi" id="gasto-tipo">
+        <option value="arriendo">🏠 Arriendo</option>
+        <option value="servicios">💡 Servicios (luz, agua, internet)</option>
+        <option value="salario">👤 Salario empleado</option>
+        <option value="compra">📦 Compra de productos</option>
+        <option value="transporte">🚗 Transporte</option>
+        <option value="varios">📝 Gastos varios</option>
+      </select>
+    </div>
+    <div class="fg"><label class="fl">Fecha *</label><input class="fi" id="gasto-fecha" type="date"></div>
+  </div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Descripción</label><input class="fi" id="gasto-desc" placeholder="Ej: Arriendo mes de marzo"></div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Monto ($) *</label><input class="fi" id="gasto-monto" type="number" min="0" placeholder="0"></div>
+    <div class="fg"><label class="fl">Forma de pago</label>
+      <select class="fi" id="gasto-pago">
+        <option value="efectivo">💵 Efectivo</option>
+        <option value="transferencia">📲 Transferencia</option>
+        <option value="credito">📋 Crédito (pendiente)</option>
+      </select>
+    </div>
+  </div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Proveedor (opcional)</label>
+    <select class="fi" id="gasto-proveedor">
+      <option value="">Sin proveedor</option>
+    </select>
+  </div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-gasto')">Cancelar</button>
+    <button class="btn bp" onclick="guardarGasto()">Guardar</button>
+  </div>
+</div></div>
+
+<!-- MODAL PROVEEDOR -->
+<div class="mo" id="mo-proveedor"><div class="md" style="width:440px">
+  <div class="mt2" id="mo-prov-title">Agregar proveedor</div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Nombre *</label><input class="fi" id="prov-nombre" placeholder="Ej: Distribuidora El Aseo"></div>
+    <div class="fg"><label class="fl">Teléfono</label><input class="fi" id="prov-tel" placeholder="300 123 4567"></div>
+  </div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Contacto</label><input class="fi" id="prov-contacto" placeholder="Nombre del vendedor"></div>
+    <div class="fg"><label class="fl">Días de visita</label><input class="fi" id="prov-dias" placeholder="Ej: Lunes y Jueves"></div>
+  </div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Productos que vende</label><input class="fi" id="prov-productos" placeholder="Ej: Jabones, desinfectantes, papel"></div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Deuda actual ($)</label><input class="fi" id="prov-deuda" type="number" min="0" placeholder="0"></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-proveedor')">Cancelar</button>
+    <button class="btn bp" onclick="guardarProveedor()">Guardar</button>
+  </div>
+</div></div>
+
+<!-- MODAL PAGAR PROVEEDOR -->
+<div class="mo" id="mo-pagar-prov"><div class="md" style="width:380px">
+  <div class="mt2">💰 Pagar a proveedor</div>
+  <div id="pagar-prov-info"></div>
+  <div class="fg mt8"><label class="fl">Monto a pagar ($)</label><input class="fi" id="pagar-prov-monto" type="number" min="0"></div>
+  <div class="fg mt8"><label class="fl">Forma de pago</label>
+    <select class="fi" id="pagar-prov-met">
+      <option value="efectivo">💵 Efectivo</option>
+      <option value="transferencia">📲 Transferencia</option>
+    </select>
+  </div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-pagar-prov')">Cancelar</button>
+    <button class="btn bp" onclick="confirmarPagoProveedor()">Confirmar pago</button>
   </div>
 </div></div>
 
