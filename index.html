@@ -69,6 +69,7 @@ let S = {
   editProd:null, cobrandoId:null, granelProdId:null, granelMode:'valor',
   _ventaPendiente:null, rol:'dueno',
   gastos:[], proveedores:[],
+  cajaMayor:{saldo:0, movimientos:[]},
 };
 
 // ══════════════════════════════════════════
@@ -89,6 +90,8 @@ async function cargarDatos() {
     S.gastos      = gastos;
     S.proveedores = proveedores;
     if (cfgSnap.exists()) S.config = { ...S.config, ...cfgSnap.data() };
+    const cajaMayorSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'));
+    if(cajaMayorSnap.exists()) S.cajaMayor = {...S.cajaMayor, ...cajaMayorSnap.data()};
     const email = auth.currentUser?.email||'';
     const vendedores = S.config.vendedores||[];
     S.rol = vendedores.includes(email) ? 'vendedor' : 'dueno';
@@ -100,7 +103,7 @@ async function cargarDatos() {
 function aplicarRol() {
   const esVendedor = S.rol === 'vendedor';
   // Ocultar secciones según rol
-  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-reporte','nav-config','nav-gastos','nav-proveedores'];
+  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-cajaMayor','nav-reporte','nav-config','nav-gastos','nav-proveedores'];
   solodueno.forEach(id => {
     const el = document.getElementById(id);
     if(el) el.style.display = esVendedor ? 'none' : 'flex';
@@ -173,6 +176,7 @@ window.goTo = function(p) {
   if(p==='caja') { document.getElementById('caja-fecha').value=hoy(); renderCierre(); }
   if(p==='reporte') initReporte();
   if(p==='gastos') initGastos();
+  if(p==='cajaMayor') renderCajaMayor();
   if(p==='proveedores') renderProveedores();
   if(p==='config') renderConfig();
   if(p==='pedidos') renderPedidos();
@@ -227,7 +231,8 @@ function renderDashboard() {
     <div class="sc"><div class="sc-label">Pedidos fiados</div><div class="sc-val o">${fmt(pedFiadosPend)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">pendiente cobro</div></div>
     <div class="sc"><div class="sc-label">Inventario compra</div><div class="sc-val b" style="font-size:15px">${fmt(totalCompra)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${S.productos.length} productos</div></div>
     <div class="sc"><div class="sc-label">Inventario venta</div><div class="sc-val g" style="font-size:15px">${fmt(totalVenta)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Ganancia pot: ${fmt(totalVenta-totalCompra)}</div></div>
-    <div class="sc"><div class="sc-label">Stock bajo</div><div class="sc-val ${bajo>0?'o':''}">${bajo}</div></div>`;
+    <div class="sc"><div class="sc-label">Stock bajo</div><div class="sc-val ${bajo>0?'o':''}">${bajo}</div></div>
+    <div class="sc" style="cursor:pointer;border:2px solid var(--a-l)" onclick="goTo('cajaMayor')"><div class="sc-label">🏦 Caja Mayor</div><div class="sc-val g">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">saldo acumulado</div></div>`;
   const dv=document.getElementById('dash-ventas');
   const ult=S.ventas.filter(v=>v.fecha===td).slice(-5).reverse();
   if(dv) dv.innerHTML=ult.length?ult.map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px"><div><span style="font-weight:500">${fmt(v.total)}</span><span class="badge ${v.pago==='efectivo'?'bb':v.pago==='transferencia'?'bpu':'by'}" style="margin-left:6px">${v.pago}</span></div><div style="color:var(--t3);font-size:11px">${v.hora||''}</div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:6px 0">Sin ventas hoy</div>';
@@ -614,7 +619,21 @@ window.chgQty = function(i,d) {
 };
 
 window.quitarItem=(i)=>{S.carrito.splice(i,1);renderCarrito();};
-window.limpiarCarrito=function(){S.carrito=[];S.pagoTipo='efectivo';selPago('efectivo');renderCarrito();};
+window.limpiarCarrito=function(){
+  S.carrito=[];S.pagoTipo='efectivo';selPago('efectivo');renderCarrito();
+  const d=document.getElementById('v-descuento');if(d)d.value='';
+  const dr=document.getElementById('v-desc-result');if(dr)dr.textContent='';
+};
+
+window.calcDescuento=function(){
+  const subtotal=S.carrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  const desc=parseFloat(document.getElementById('v-descuento')?.value)||0;
+  const r=document.getElementById('v-desc-result');
+  if(!r)return;
+  if(desc<=0){r.textContent='';return;}
+  if(desc>=subtotal){r.textContent='⚠ Supera total';document.getElementById('v-descuento').value='';return;}
+  r.textContent='→ '+fmt(subtotal-desc);
+};
 
 window.selPago = function(t) {
   S.pagoTipo=t;
@@ -625,21 +644,23 @@ function selPago(t){window.selPago(t);}
 
 window.procesarVenta = async function() {
   if(!S.carrito.length){toast('Carrito vacío',false);return;}
-  const total=S.carrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  const subtotal=S.carrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  const descuento=parseFloat(document.getElementById('v-descuento')?.value)||0;
+  const total=Math.max(0,subtotal-descuento);
   const hora=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
 
   if(S.pagoTipo==='fiado'){
     const nom=document.getElementById('f-nom').value.trim();
     if(!nom){toast('Ingresa el nombre del cliente',false);return;}
     const fData={cliente:nom,telefono:document.getElementById('f-tel').value.trim(),
-      fecha:hoy(),total,saldo:total,estado:'pendiente',items:S.carrito.map(c=>({...c})),pagos:[]};
+      fecha:hoy(),total,saldo:total,descuento:descuento||0,estado:'pendiente',items:S.carrito.map(c=>({...c})),pagos:[]};
     const fId=await agregarDoc('fiados',fData);
     S.fiados.push({_id:fId,...fData});
     document.getElementById('f-nom').value=''; document.getElementById('f-tel').value='';
     await descontarStock();
     window.limpiarCarrito(); updateBadge(); toast('Fiado registrado para '+nom);
   } else if(S.pagoTipo==='efectivo'){
-    S._ventaPendiente={total,items:S.carrito.map(c=>({...c})),hora};
+    S._ventaPendiente={total,descuento,subtotal,items:S.carrito.map(c=>({...c})),hora};
     document.getElementById('vueltos-total').textContent=fmt(total);
     document.getElementById('pago-cliente').value='';
     document.getElementById('vueltos-result').innerHTML='';
@@ -647,7 +668,7 @@ window.procesarVenta = async function() {
     abrirMo('mo-vueltos');
     setTimeout(()=>document.getElementById('pago-cliente').focus(),100);
   } else {
-    const vData={fecha:hoy(),hora,pago:'transferencia',total,items:S.carrito.map(c=>({...c})),pagoCliente:total,vueltos:0};
+    const vData={fecha:hoy(),hora,pago:'transferencia',total,descuento:descuento||0,subtotal:subtotal||total,items:S.carrito.map(c=>({...c})),pagoCliente:total,vueltos:0};
     const vId=await agregarDoc('ventas',vData);
     S.ventas.push({_id:vId,...vData});
     await descontarStock(); window.limpiarCarrito(); toast('Venta de '+fmt(total));
@@ -683,7 +704,7 @@ window.confirmarEfectivo = async function() {
   const vp=S._ventaPendiente;
   const pago=parseFloat(document.getElementById('pago-cliente').value)||0;
   const vuelto=pago-vp.total;
-  const vData={fecha:hoy(),hora:vp.hora,pago:'efectivo',total:vp.total,items:vp.items,pagoCliente:pago,vueltos:vuelto};
+  const vData={fecha:hoy(),hora:vp.hora,pago:'efectivo',total:vp.total,descuento:vp.descuento||0,subtotal:vp.subtotal||vp.total,items:vp.items,pagoCliente:pago,vueltos:vuelto};
   const vId=await agregarDoc('ventas',vData);
   S.ventas.push({_id:vId,...vData});
   await descontarStock(); cerrarMo('mo-vueltos'); window.limpiarCarrito(); updateBadge();
@@ -765,6 +786,7 @@ function generarTextoTicket(v){
     if(i.tipo==='unidad'&&i.qty>1)t+='  '+i.qty+' x '+fmt(i.precio)+'\n';
   });
   t+=lin+'\n';
+  if(v.descuento>0){t+=lj('Subtotal:',fmt(v.subtotal||v.total+v.descuento))+'\n';t+=lj('Descuento:','- '+fmt(v.descuento))+'\n';}
   t+=lj('TOTAL:',fmt(v.total))+'\n';
   if(v.pago==='efectivo'){t+=lj('Efectivo:',fmt(v.pagoCliente||v.total))+'\n';t+=lj('Vueltos:',fmt(v.vueltos||0))+'\n';}
   else t+=lj('Pago:','Transferencia')+'\n';
@@ -1764,6 +1786,14 @@ window.guardarGasto=async function(){
     prov.deuda=(prov.deuda||0)+monto;
     await guardarDoc('proveedores',prov._id,{deuda:prov.deuda});
   }
+  if(data.pago==='caja_mayor'){
+    if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+    S.cajaMayor.saldo=Math.max(0,(S.cajaMayor.saldo||0)-monto);
+    S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
+      {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+       tipo:'gasto',desc:(data.descripcion||TIPOS_GASTO[data.tipo]||data.tipo),monto:-monto}];
+    await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
+  }
   cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
 };
 
@@ -1893,6 +1923,105 @@ window.confirmarPagoProveedor=async function(){
   toast('Pago de '+fmt(monto)+' registrado a '+p.nombre);
 };
 
+// ══════════════════════════════════════════
+//  CAJA MAYOR
+// ══════════════════════════════════════════
+function renderCajaMayor(){
+  if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+  const mov=[...(S.cajaMayor.movimientos||[])].reverse().slice(0,60);
+  const saldo=S.cajaMayor.saldo||0;
+  const totalEntradas=(S.cajaMayor.movimientos||[]).filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
+  const totalSalidas=Math.abs((S.cajaMayor.movimientos||[]).filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
+  document.getElementById('cajaMayor-content').innerHTML=`
+    <div class="stats-grid" style="margin-bottom:16px">
+      <div class="sc" style="border:2px solid var(--accent)">
+        <div class="sc-label">Saldo actual</div>
+        <div class="sc-val g" style="font-size:28px">${fmt(saldo)}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:3px">${(S.cajaMayor.movimientos||[]).length} movimientos</div>
+      </div>
+      <div class="sc"><div class="sc-label">Total entradas</div><div class="sc-val b">${fmt(totalEntradas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">cierres caja menor</div></div>
+      <div class="sc"><div class="sc-label">Total salidas</div><div class="sc-val o">${fmt(totalSalidas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">gastos de caja mayor</div></div>
+    </div>
+    ${mov.length?`
+    <div class="card">
+      <div style="font-weight:600;font-size:14px;margin-bottom:12px">📋 Historial de movimientos</div>
+      <div class="tw"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripción</th><th>Monto</th></tr></thead><tbody>
+        ${mov.map(m=>`<tr>
+          <td style="font-size:12px">${fmtF(m.fecha)}</td>
+          <td style="font-size:12px;color:var(--t3)">${m.hora||'—'}</td>
+          <td><span class="badge ${m.tipo==='cierre'?'bg':'br'}">${m.tipo==='cierre'?'🏦 Cierre':'💸 Gasto'}</span></td>
+          <td style="font-size:12px;color:var(--t2)">${m.desc||'—'}${m.quedaEnMenor!==undefined?'<div style="font-size:10px;color:var(--t3)">Quedó en menor: '+fmt(m.quedaEnMenor)+'</div>':''}</td>
+          <td class="mono" style="font-weight:600;color:${m.monto>=0?'var(--info)':'var(--danger)'}">
+            ${m.monto>=0?'+':''}${fmt(m.monto)}
+          </td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`:'<div class="card" style="text-align:center;padding:28px;color:var(--t3)">Sin movimientos aún — haz el primer cierre de caja menor.</div>'}`;
+}
+window.renderCajaMayor=renderCajaMayor;
+
+window.abrirCierreMenorModal=function(){
+  const fecha=document.getElementById('caja-fecha').value||hoy();
+  const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado');
+  const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
+  const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
+  const gastosDia=S.gastos.filter(g=>g.fecha===fecha&&(g.pago==='efectivo'||g.pago==='caja_menor'));
+  const gastosEf=gastosDia.reduce((a,g)=>a+g.monto,0);
+  const totalCobrado=ef+tr;
+  const cajaFinal=totalCobrado-gastosEf;
+  document.getElementById('cierre-menor-resumen').innerHTML=`
+    <div style="background:var(--s2);border-radius:var(--rs);padding:12px;font-size:13px">
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>Cobrado hoy (efectivo + transfer.)</span><span class="mono" style="color:var(--info)">${fmt(totalCobrado)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>Gastos pagados en efectivo/caja menor</span><span class="mono" style="color:var(--danger)">- ${fmt(gastosEf)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:15px;border-top:2px solid var(--border);margin-top:4px">
+        <span>💵 Saldo disponible en caja</span>
+        <span class="mono" style="color:${cajaFinal>=0?'var(--a-d)':'var(--danger)'}">${fmt(cajaFinal)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px;color:var(--t3)">
+        <span>🏦 Saldo actual caja mayor</span><span class="mono">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</span>
+      </div>
+    </div>`;
+  window._cierreMenorSaldo=cajaFinal;
+  document.getElementById('cm-monto-queda').value='';
+  document.getElementById('cm-transferencia-result').textContent='';
+  document.getElementById('cm-desc').value='Cierre '+fmtF(fecha);
+  abrirMo('mo-cierre-menor');
+};
+
+window.calcTransferenciaCajaMayor=function(){
+  const saldoCaja=window._cierreMenorSaldo||0;
+  const queda=parseFloat(document.getElementById('cm-monto-queda').value)||0;
+  const r=document.getElementById('cm-transferencia-result');
+  if(queda<0){r.innerHTML='<span style="color:var(--danger)">⚠ Ingresa un valor positivo</span>';return;}
+  if(queda>saldoCaja){r.innerHTML='<span style="color:var(--danger)">⚠ Supera el saldo disponible ('+fmt(saldoCaja)+')</span>';return;}
+  const pasa=saldoCaja-queda;
+  r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor`;
+};
+
+window.confirmarCierreMenor=async function(){
+  const saldoCaja=window._cierreMenorSaldo||0;
+  const queda=parseFloat(document.getElementById('cm-monto-queda').value);
+  if(isNaN(queda)||queda<0){toast('Ingresa cuánto queda en caja menor',false);return;}
+  if(queda>saldoCaja){toast('El monto supera el saldo disponible',false);return;}
+  const pasa=saldoCaja-queda;
+  const desc=document.getElementById('cm-desc').value.trim()||'Cierre caja menor';
+  if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+  S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+pasa;
+  S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
+    {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+     tipo:'cierre',desc,monto:pasa,quedaEnMenor:queda}];
+  await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
+  cerrarMo('mo-cierre-menor');
+  renderDashboard();
+  toast('✓ Cierre registrado — '+fmt(pasa)+' pasaron a Caja Mayor · Quedan '+fmt(queda)+' en Caja Menor');
+};
+
+// ══════════════════════════════════════════
+
 document.addEventListener('click',e=>{
   if(!e.target.closest('.pos-wrap')){
     ['v-results','ped-results','editar-ped-results','editar-venta-results'].forEach(id=>{
@@ -1900,6 +2029,12 @@ document.addEventListener('click',e=>{
     });
   }
 });
+</script>
+<script>
+// Bridge: expose module functions to inline event handlers
+function doLogin(){if(window.doLogin)window.doLogin();else alert('Cargando... intente de nuevo');}
+function doLogout(){if(window.doLogout)window.doLogout();}
+function goTo(p){if(window.goTo)window.goTo(p);}
 </script>
 
 <style>
@@ -2025,9 +2160,9 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     <div class="login-title">Tienda de Aseo</div>
     <div class="login-sub">Inicia sesión con tu cuenta</div>
     <div class="login-err" id="login-err"></div>
-    <div class="fg" style="margin-bottom:10px"><label class="fl">Correo electrónico</label><input class="fi" id="l-user" type="email" placeholder="negocio@correo.com" onkeydown="if(event.key==='Enter')doLogin()"></div>
-    <div class="fg" style="margin-bottom:16px"><label class="fl">Contraseña</label><input class="fi" id="l-pass" type="password" placeholder="Tu contraseña" onkeydown="if(event.key==='Enter')doLogin()"></div>
-    <button class="btn bp" style="width:100%;justify-content:center" onclick="doLogin()">Entrar</button>
+    <div class="fg" style="margin-bottom:10px"><label class="fl">Correo electrónico</label><input class="fi" id="l-user" type="email" placeholder="negocio@correo.com" onkeydown="if(event.key==='Enter'){if(window.doLogin)window.doLogin();}"></div>
+    <div class="fg" style="margin-bottom:16px"><label class="fl">Contraseña</label><input class="fi" id="l-pass" type="password" placeholder="Tu contraseña" onkeydown="if(event.key==='Enter'){if(window.doLogin)window.doLogin();}"></div>
+    <button class="btn bp" style="width:100%;justify-content:center" onclick="window.doLogin()">Entrar</button>
   </div>
 </div>
 
@@ -2045,7 +2180,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
       <div class="nav-item" id="nav-pedidos" data-page="pedidos" onclick="goTo('pedidos')" style="display:none"><span>🚚</span> Pedidos <span class="nav-badge" id="badge-pedidos" style="display:none">0</span></div>
       <div class="nav-item" id="nav-venta" data-page="venta" onclick="goTo('venta')"><span>🛒</span> Nueva Venta</div>
       <div class="nav-item" data-page="fiados" id="nav-fiados" onclick="goTo('fiados')"><span>📋</span> Fiados <span class="nav-badge" id="badge-fiados" style="display:none">0</span></div>
-      <div class="nav-item" id="nav-caja" data-page="caja" onclick="goTo('caja')"><span>💰</span> Cierre de Caja</div>
+      <div class="nav-item" id="nav-caja" data-page="caja" onclick="goTo('caja')"><span>💵</span> Caja Menor</div>
+      <div class="nav-item" id="nav-cajaMayor" data-page="cajaMayor" onclick="goTo('cajaMayor')"><span>🏦</span> Caja Mayor</div>
       <div class="nav-item" id="nav-reporte" data-page="reporte" onclick="goTo('reporte')"><span>📈</span> Reportes</div>
       <div class="nav-item" id="nav-gastos" data-page="gastos" onclick="goTo('gastos')"><span>💸</span> Gastos</div>
       <div class="nav-item" id="nav-proveedores" data-page="proveedores" onclick="goTo('proveedores')"><span>🏭</span> Proveedores</div>
@@ -2053,7 +2189,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </nav>
     <div class="sidebar-foot">
       <div id="clock-d" style="font-size:11px;color:var(--t3);margin-bottom:8px;font-family:'DM Mono',monospace"></div>
-      <div class="logout-btn" onclick="doLogout()"><span>🚪</span> Cerrar sesión</div>
+      <div class="logout-btn" onclick="window.doLogout()"><span>🚪</span> Cerrar sesión</div>
     </div>
   </div>
 
@@ -2111,6 +2247,11 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <div class="fg mt8"><label class="fl">Nombre cliente</label><input class="fi" id="f-nom" placeholder="Nombre"></div>
             <div class="fg mt8"><label class="fl">Teléfono</label><input class="fi" id="f-tel" placeholder="Número"></div>
           </div>
+          <div style="background:var(--warn-l);border:1px solid #FAC775;border-radius:var(--rs);padding:9px 12px;margin-top:10px;display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;color:var(--warn);font-weight:500">🏷️ Descuento:</span>
+            <input class="fi" id="v-descuento" type="number" min="0" placeholder="$0 opcional" style="flex:1;font-size:13px" oninput="calcDescuento()">
+            <span id="v-desc-result" style="font-size:12px;color:var(--a-d);font-weight:600;white-space:nowrap"></span>
+          </div>
           <button class="btn bp" style="width:100%;margin-top:10px;justify-content:center" onclick="procesarVenta()">✓ Confirmar venta</button>
           <button class="btn" style="width:100%;margin-top:6px;justify-content:center" onclick="limpiarCarrito()">✕ Cancelar</button>
         </div></div>
@@ -2123,8 +2264,12 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </div>
 
     <div class="page" id="page-caja">
-      <div class="ph"><div><div class="pt">Cierre de Caja</div><div class="ps">Fiados no cuentan hasta ser cobrados</div></div>
-        <div style="display:flex;gap:8px;align-items:center"><input type="date" class="fi" id="caja-fecha" onchange="renderCierre()" style="width:160px"><button class="btn bp" onclick="exportarCierre()">⬇ TXT</button></div>
+      <div class="ph"><div><div class="pt">Cierre Caja Menor</div><div class="ps">Fiados no cuentan hasta ser cobrados</div></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="date" class="fi" id="caja-fecha" onchange="renderCierre()" style="width:160px">
+          <button class="btn bp" onclick="abrirCierreMenorModal()">🏦 Cierre → Caja Mayor</button>
+          <button class="btn" onclick="exportarCierre()">⬇ TXT</button>
+        </div>
       </div>
       <div id="cierre-content"></div>
     </div>
@@ -2180,6 +2325,14 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
           <div style="font-size:11px;color:var(--t3);margin-top:6px">El correo debe estar registrado en Firebase Authentication</div>
         </div>
       </div>
+    </div>
+
+    <!-- PÁGINA CAJA MAYOR -->
+    <div class="page" id="page-cajaMayor">
+      <div class="ph">
+        <div><div class="pt">🏦 Caja Mayor</div><div class="ps">Saldo acumulado del negocio</div></div>
+      </div>
+      <div id="cajaMayor-content"></div>
     </div>
 
     <div class="page" id="page-pedidos">
@@ -2387,6 +2540,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
         <option value="efectivo">💵 Efectivo</option>
         <option value="transferencia">📲 Transferencia</option>
         <option value="credito">📋 Crédito (pendiente)</option>
+        <option value="caja_menor">💵 Caja menor (efectivo tienda)</option>
+        <option value="caja_mayor">🏦 Caja mayor</option>
       </select>
     </div>
   </div>
@@ -2434,6 +2589,26 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   <div class="ma">
     <button class="btn" onclick="cerrarMo('mo-pagar-prov')">Cancelar</button>
     <button class="btn bp" onclick="confirmarPagoProveedor()">Confirmar pago</button>
+  </div>
+</div></div>
+
+<!-- MODAL CIERRE CAJA MENOR -->
+<div class="mo" id="mo-cierre-menor"><div class="md" style="width:440px">
+  <div class="mt2">🏦 Cierre de Caja Menor</div>
+  <div id="cierre-menor-resumen" style="margin-bottom:14px"></div>
+  <div class="alert ai" style="margin-bottom:12px">El excedente pasará a <strong>Caja Mayor</strong>. Define cuánto queda en caja menor para el día siguiente.</div>
+  <div class="fg" style="margin-bottom:11px">
+    <label class="fl">💵 ¿Cuánto queda en Caja Menor? ($)</label>
+    <input class="fi" id="cm-monto-queda" type="number" min="0" placeholder="Ej: 50000" oninput="calcTransferenciaCajaMayor()">
+    <div id="cm-transferencia-result" style="margin-top:8px;font-size:13px;font-weight:600;color:var(--a-d)"></div>
+  </div>
+  <div class="fg" style="margin-bottom:11px">
+    <label class="fl">Descripción (opcional)</label>
+    <input class="fi" id="cm-desc" placeholder="Ej: Cierre del día">
+  </div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-cierre-menor')">Cancelar</button>
+    <button class="btn bp" onclick="confirmarCierreMenor()">✓ Confirmar cierre</button>
   </div>
 </div></div>
 
