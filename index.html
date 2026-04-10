@@ -804,7 +804,14 @@ function mostrarTicket(v){
   abrirMo('mo-ticket');
 }
 
-window.imprimirTicket=()=>window.print();
+window.imprimirTicket=function(){
+  // Forzar tamaño de página 80mm para impresora térmica
+  const style = document.getElementById('print-page-style') || document.createElement('style');
+  style.id = 'print-page-style';
+  style.textContent = '@page { size: 80mm auto; margin: 0mm; }';
+  document.head.appendChild(style);
+  setTimeout(()=>{ window.print(); }, 80);
+};
 window.imprimirVentaHistorial=(id)=>{const v=S.ventas.find(x=>x._id===id);if(v)mostrarTicket(v);};
 
 // ══════════════════════════════════════════
@@ -1361,6 +1368,11 @@ window.confirmarAbono=async function(){
 };
 
 window.imprimirPedido=function(id){
+  // Restaurar página media carta para pedidos
+  const style = document.getElementById('print-page-style') || document.createElement('style');
+  style.id = 'print-page-style';
+  style.textContent = '@page { size: 21.59cm 13.97cm landscape; margin: 0mm; }';
+  document.head.appendChild(style);
   const p=S.pedidos.find(x=>x._id===id);
   if(!p)return;
   const nombre=S.config.nombre||'TIENDA DE ASEO';
@@ -2116,32 +2128,75 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 .vueltos-label{font-size:12px;color:var(--a-d);margin-top:2px}
 .vueltos-warn{background:var(--danger-l);border:2px solid var(--danger);border-radius:var(--r);padding:12px;text-align:center;margin:12px 0;color:var(--danger);font-weight:600}
 @media print {
+  @page {
+    size: 80mm auto;
+    margin: 0mm;
+  }
+  @page :first { margin: 0mm; }
+  html, body {
+    width: 80mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
   body * { visibility: hidden !important; }
-  /* Tiquete térmico de venta */
+
+  /* ── Tiquete térmico de venta ── */
   #ticket-print, #ticket-print * { visibility: visible !important; }
   #ticket-print {
-    position: fixed !important;
-    left: 0; top: 0;
-    width: 80mm !important;
+    position: absolute !important;
+    left: 0 !important; top: 0 !important;
+    width: 72mm !important;
+    max-width: 72mm !important;
     font-family: 'Courier New', monospace !important;
-    font-size: 11px !important;
+    font-size: 12px !important;
+    line-height: 1.4 !important;
     color: #000 !important;
     background: #fff !important;
-    padding: 4mm !important;
+    padding: 2mm 4mm !important;
+    margin: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
-  /* Media carta para pedidos */
+  #ticket-print pre {
+    font-family: 'Courier New', monospace !important;
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+    color: #000 !important;
+    margin: 0 !important;
+    white-space: pre !important;
+  }
+  #ticket-print img {
+    max-width: 40mm !important;
+    height: auto !important;
+    display: block !important;
+    margin: 0 auto 2mm auto !important;
+  }
+
+  /* ── Pedido media carta ── */
   #pedido-print, #pedido-print * { visibility: visible !important; }
   #pedido-print {
-    position: fixed !important;
-    left: 0; top: 0;
+    position: absolute !important;
+    left: 0 !important; top: 0 !important;
     width: 21.59cm !important;
-    height: 13.97cm !important;
     font-family: Arial, sans-serif !important;
     font-size: 11px !important;
     color: #000 !important;
     background: #fff !important;
     padding: 10mm 15mm !important;
     box-sizing: border-box !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* Regla separada para pedido con su propio @page */
+@media print {
+  body.imprimiendo-pedido {
+    width: 21.59cm !important;
+  }
+  body.imprimiendo-pedido @page {
+    size: 21.59cm 13.97cm landscape;
+    margin: 0;
   }
 }
 #ticket-print{display:none}
