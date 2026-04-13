@@ -1807,6 +1807,165 @@ window.guardarEditarVenta=async function(){
   toast('Venta actualizada — nuevo total: '+fmt(totalNew));
 };
 // ══════════════════════════════════════════
+//  ELIMINAR VENTA CON DEVOLUCIÓN DE STOCK
+// ══════════════════════════════════════════
+window.eliminarVentaConStock = async function(id) {
+  const venta = S.ventas.find(v => v._id === id);
+  if (!venta) {
+    toast('Venta no encontrada', false);
+    return;
+  }
+  
+  if (venta.esAbono || venta.esPedido) {
+    toast('No se pueden eliminar abonos o pedidos de esta forma', false);
+    return;
+  }
+  
+  const confirmar = confirm(`¿Eliminar venta #${venta.numFactura || venta._id.slice(0,6)} por ${fmt(venta.total)}?\n\nLos productos volverán al inventario.`);
+  if (!confirmar) return;
+  
+  try {
+    mostrarCargando(true);
+    
+    for (const item of venta.items) {
+      const producto = S.productos.find(p => p._id === item._id);
+      if (producto) {
+        let cantidadADevolver = 0;
+        if (item.tipo === 'granel') {
+          cantidadADevolver = item.cantGranel || 0;
+        } else {
+          cantidadADevolver = item.qty || 1;
+        }
+        if (cantidadADevolver > 0) {
+          producto.stock += cantidadADevolver;
+          await guardarDoc('productos', producto._id, { stock: producto.stock });
+        }
+      }
+    }
+    
+    await borrarDoc('ventas', id);
+    S.ventas = S.ventas.filter(v => v._id !== id);
+    
+    renderCierre();
+    renderDashboard();
+    
+    mostrarCargando(false);
+    toast(`✅ Venta eliminada - Stock devuelto`);
+    
+  } catch (error) {
+    mostrarCargando(false);
+    toast('Error: ' + error.message, false);
+  }
+};
+// ══════════════════════════════════════════
+//  ELIMINAR FIADO CON DEVOLUCIÓN DE STOCK
+// ══════════════════════════════════════════
+window.eliminarFiadoConStock = async function(id) {
+  const fiado = S.fiados.find(f => f._id === id);
+  if (!fiado) {
+    toast('Fiado no encontrado', false);
+    return;
+  }
+  
+  const tienePagos = (fiado.pagos && fiado.pagos.length > 0);
+  if (tienePagos) {
+    toast('❌ No se puede eliminar: este fiado ya tiene abonos registrados', false);
+    return;
+  }
+  
+  const confirmar = confirm(`⚠️ ELIMINAR FIADO\nCliente: ${fiado.cliente}\nTotal: ${fmt(fiado.total)}\n\n¿Eliminar? Los productos volverán al inventario.`);
+  if (!confirmar) return;
+  
+  try {
+    mostrarCargando(true);
+    
+    if (fiado.items && fiado.items.length) {
+      for (const item of fiado.items) {
+        const producto = S.productos.find(p => p._id === item._id);
+        if (producto) {
+          let cantidadADevolver = 0;
+          if (item.tipo === 'granel') {
+            cantidadADevolver = item.cantGranel || 0;
+          } else {
+            cantidadADevolver = item.qty || 1;
+          }
+          if (cantidadADevolver > 0) {
+            producto.stock += cantidadADevolver;
+            await guardarDoc('productos', producto._id, { stock: producto.stock });
+          }
+        }
+      }
+    }
+    
+    await borrarDoc('fiados', id);
+    S.fiados = S.fiados.filter(f => f._id !== id);
+    
+    renderFiados();
+    renderDashboard();
+    updateBadge();
+    
+    mostrarCargando(false);
+    toast(`✅ Fiado de ${fiado.cliente} eliminado - Stock devuelto`);
+    
+  } catch (error) {
+    mostrarCargando(false);
+    toast('Error: ' + error.message, false);
+  }
+};
+// ══════════════════════════════════════════
+//  ELIMINAR PEDIDO FIADO CON DEVOLUCIÓN DE STOCK
+// ══════════════════════════════════════════
+window.eliminarPedidoFiadoConStock = async function(id) {
+  const pedido = S.pedidos.find(p => p._id === id);
+  if (!pedido) {
+    toast('Pedido no encontrado', false);
+    return;
+  }
+  
+  if (pedido.pago !== 'fiado') {
+    toast('Este pedido no es fiado.', false);
+    return;
+  }
+  
+  const tieneAbonos = (pedido.abonos && pedido.abonos.length > 0);
+  if (tieneAbonos) {
+    toast('❌ No se puede eliminar: este pedido fiado ya tiene abonos registrados', false);
+    return;
+  }
+  
+  const confirmar = confirm(`⚠️ ELIMINAR PEDIDO FIADO\nCliente: ${pedido.cliente}\nTotal: ${fmt(pedido.total)}\n\n¿Eliminar? Los productos volverán al inventario.`);
+  if (!confirmar) return;
+  
+  try {
+    mostrarCargando(true);
+    
+    for (const item of pedido.items || []) {
+      const producto = S.productos.find(p => p._id === item._id);
+      if (producto) {
+        const cantidad = item.tipo === 'granel' ? (item.cantGranel || 0) : (item.qty || 1);
+        if (cantidad > 0) {
+          producto.stock += cantidad;
+          await guardarDoc('productos', producto._id, { stock: producto.stock });
+        }
+      }
+    }
+    
+    await borrarDoc('pedidos', id);
+    S.pedidos = S.pedidos.filter(p => p._id !== id);
+    
+    renderPedidos();
+    renderDashboard();
+    updateBadgePedidos();
+    
+    mostrarCargando(false);
+    toast(`✅ Pedido fiado de ${pedido.cliente} eliminado - Stock devuelto`);
+    
+  } catch (error) {
+    mostrarCargando(false);
+    toast('Error: ' + error.message, false);
+  }
+};
+// ══════════════════════════════════════════
 //  GASTOS
 // ══════════════════════════════════════════
 const TIPOS_GASTO={arriendo:'🏠 Arriendo',servicios:'💡 Servicios',salario:'👤 Salario',compra:'📦 Compra productos',transporte:'🚗 Transporte',varios:'📝 Varios'};
