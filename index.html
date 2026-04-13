@@ -707,7 +707,7 @@ window.procesarVenta = async function() {
     const cliNomEf=document.getElementById('v-cli-nom')?.value.trim()||'';
     const cliTelEf=document.getElementById('v-cli-tel')?.value.trim()||'';
     S._ventaPendiente={total,descuento,subtotal,numFactura:numFacEf,
-      cliente:cliNomEf||undefined,telefono:cliTelEf||undefined,
+      cliente:cliNomEf||null,telefono:cliTelEf||null,
       items:S.carrito.map(c=>({...c})),hora};
     document.getElementById('vueltos-total').textContent=fmt(total);
     document.getElementById('pago-cliente').value='';
@@ -720,7 +720,7 @@ window.procesarVenta = async function() {
     const cliNom=document.getElementById('v-cli-nom')?.value.trim()||'';
     const cliTel=document.getElementById('v-cli-tel')?.value.trim()||'';
     const vData={fecha:hoy(),hora,pago:'transferencia',total,descuento:descuento||0,subtotal:subtotal||total,
-      numFactura:numFac,cliente:cliNom||undefined,telefono:cliTel||undefined,
+      numFactura:numFac,cliente:cliNom||null,telefono:cliTel||null,
       items:S.carrito.map(c=>({...c})),pagoCliente:total,vueltos:0};
     const vId=await agregarDoc('ventas',vData);
     S.ventas.push({_id:vId,...vData});
@@ -759,7 +759,7 @@ window.confirmarEfectivo = async function() {
   const vuelto=pago-vp.total;
   const vData={fecha:hoy(),hora:vp.hora,pago:'efectivo',total:vp.total,descuento:vp.descuento||0,
     subtotal:vp.subtotal||vp.total,numFactura:vp.numFactura,
-    cliente:vp.cliente||undefined,telefono:vp.telefono||undefined,
+    cliente:vp.cliente||null,telefono:vp.telefono||null,
     items:vp.items,pagoCliente:pago,vueltos:vuelto};
   const vId=await agregarDoc('ventas',vData);
   S.ventas.push({_id:vId,...vData});
