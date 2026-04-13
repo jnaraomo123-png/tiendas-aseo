@@ -70,6 +70,7 @@ let S = {
   _ventaPendiente:null, rol:'dueno',
   gastos:[], proveedores:[],
   cajaMayor:{saldo:0, movimientos:[]},
+  contadorFactura:0,
 };
 
 // ══════════════════════════════════════════
@@ -79,9 +80,13 @@ async function cargarDatos() {
   mostrarCargando(true);
   try {
     const [prods, ventas, fiados, pedidos, gastos, proveedores, cfgSnap] = await Promise.all([
-      leerCol('productos'), leerCol('ventas'), leerCol('fiados'),
-      leerCol('pedidos'), leerCol('gastos'), leerCol('proveedores'),
-      getDoc(cfgDoc())
+      leerCol('productos').catch(()=>[]),
+      leerCol('ventas').catch(()=>[]),
+      leerCol('fiados').catch(()=>[]),
+      leerCol('pedidos').catch(()=>[]),
+      leerCol('gastos').catch(()=>[]),
+      leerCol('proveedores').catch(()=>[]),
+      getDoc(cfgDoc()).catch(()=>({exists:()=>false}))
     ]);
     S.productos   = prods;
     S.ventas      = ventas;
@@ -90,8 +95,14 @@ async function cargarDatos() {
     S.gastos      = gastos;
     S.proveedores = proveedores;
     if (cfgSnap.exists()) S.config = { ...S.config, ...cfgSnap.data() };
-    const cajaMayorSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'));
-    if(cajaMayorSnap.exists()) S.cajaMayor = {...S.cajaMayor, ...cajaMayorSnap.data()};
+    try {
+      const cajaMayorSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'));
+      if(cajaMayorSnap.exists()) S.cajaMayor = {...S.cajaMayor, ...cajaMayorSnap.data()};
+    } catch(e) { console.log('cajaMayor no inicializada aún'); }
+    try {
+      const contSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'contador'));
+      if(contSnap.exists()) S.contadorFactura = contSnap.data().ultimo||0;
+    } catch(e) { console.log('contador no inicializado aún'); }
     const email = auth.currentUser?.email||'';
     const vendedores = S.config.vendedores||[];
     S.rol = vendedores.includes(email) ? 'vendedor' : 'dueno';
@@ -124,6 +135,9 @@ function mostrarCargando(v) {
 // ══════════════════════════════════════════
 //  AUTH
 // ══════════════════════════════════════════
+// Cerrar sesión al cargar la página para pedir contraseña siempre
+signOut(auth).catch(()=>{});
+
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     document.getElementById('login-screen').style.display = 'none';
@@ -163,6 +177,13 @@ window.doLogout = async function() {
 // ══════════════════════════════════════════
 //  NAV
 // ══════════════════════════════════════════
+async function getNextNumFactura() {
+  S.contadorFactura = (S.contadorFactura||0) + 1;
+  await setDoc(doc(db,'negocios',uidActivo(),'config','contador'),
+    {ultimo: S.contadorFactura}, {merge:true});
+  return String(S.contadorFactura).padStart(6,'0');
+}
+
 window.goTo = function(p) {
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
@@ -623,6 +644,8 @@ window.limpiarCarrito=function(){
   S.carrito=[];S.pagoTipo='efectivo';selPago('efectivo');renderCarrito();
   const d=document.getElementById('v-descuento');if(d)d.value='';
   const dr=document.getElementById('v-desc-result');if(dr)dr.textContent='';
+  const cn=document.getElementById('v-cli-nom');if(cn)cn.value='';
+  const ct=document.getElementById('v-cli-tel');if(ct)ct.value='';
 };
 
 window.calcDescuento=function(){
@@ -660,7 +683,12 @@ window.procesarVenta = async function() {
     await descontarStock();
     window.limpiarCarrito(); updateBadge(); toast('Fiado registrado para '+nom);
   } else if(S.pagoTipo==='efectivo'){
-    S._ventaPendiente={total,descuento,subtotal,items:S.carrito.map(c=>({...c})),hora};
+    const numFacEf=await getNextNumFactura();
+    const cliNomEf=document.getElementById('v-cli-nom')?.value.trim()||'';
+    const cliTelEf=document.getElementById('v-cli-tel')?.value.trim()||'';
+    S._ventaPendiente={total,descuento,subtotal,numFactura:numFacEf,
+      cliente:cliNomEf||undefined,telefono:cliTelEf||undefined,
+      items:S.carrito.map(c=>({...c})),hora};
     document.getElementById('vueltos-total').textContent=fmt(total);
     document.getElementById('pago-cliente').value='';
     document.getElementById('vueltos-result').innerHTML='';
@@ -668,10 +696,15 @@ window.procesarVenta = async function() {
     abrirMo('mo-vueltos');
     setTimeout(()=>document.getElementById('pago-cliente').focus(),100);
   } else {
-    const vData={fecha:hoy(),hora,pago:'transferencia',total,descuento:descuento||0,subtotal:subtotal||total,items:S.carrito.map(c=>({...c})),pagoCliente:total,vueltos:0};
+    const numFac=await getNextNumFactura();
+    const cliNom=document.getElementById('v-cli-nom')?.value.trim()||'';
+    const cliTel=document.getElementById('v-cli-tel')?.value.trim()||'';
+    const vData={fecha:hoy(),hora,pago:'transferencia',total,descuento:descuento||0,subtotal:subtotal||total,
+      numFactura:numFac,cliente:cliNom||undefined,telefono:cliTel||undefined,
+      items:S.carrito.map(c=>({...c})),pagoCliente:total,vueltos:0};
     const vId=await agregarDoc('ventas',vData);
     S.ventas.push({_id:vId,...vData});
-    await descontarStock(); window.limpiarCarrito(); toast('Venta de '+fmt(total));
+    await descontarStock(); window.limpiarCarrito(); toast('Venta #'+numFac+' — '+fmt(total));
     mostrarTicket({_id:vId,...vData});
   }
 };
@@ -704,11 +737,14 @@ window.confirmarEfectivo = async function() {
   const vp=S._ventaPendiente;
   const pago=parseFloat(document.getElementById('pago-cliente').value)||0;
   const vuelto=pago-vp.total;
-  const vData={fecha:hoy(),hora:vp.hora,pago:'efectivo',total:vp.total,descuento:vp.descuento||0,subtotal:vp.subtotal||vp.total,items:vp.items,pagoCliente:pago,vueltos:vuelto};
+  const vData={fecha:hoy(),hora:vp.hora,pago:'efectivo',total:vp.total,descuento:vp.descuento||0,
+    subtotal:vp.subtotal||vp.total,numFactura:vp.numFactura,
+    cliente:vp.cliente||undefined,telefono:vp.telefono||undefined,
+    items:vp.items,pagoCliente:pago,vueltos:vuelto};
   const vId=await agregarDoc('ventas',vData);
   S.ventas.push({_id:vId,...vData});
   await descontarStock(); cerrarMo('mo-vueltos'); window.limpiarCarrito(); updateBadge();
-  toast('Venta registrada — Vueltos: '+fmt(vuelto));
+  toast('Venta #'+(vp.numFactura||'')+'  Vueltos: '+fmt(vuelto));
   mostrarTicket({_id:vId,...vData});
 };
 
@@ -770,7 +806,7 @@ function updateBadge() {
 //  TICKET
 // ══════════════════════════════════════════
 function generarTextoTicket(v){
-  const w=28; const lin='─'.repeat(w);
+  const w=32; const lin='─'.repeat(w);
   const ctr=(t)=>' '.repeat(Math.max(0,Math.floor((w-t.length)/2)))+t;
   const lj=(a,b)=>{const s=String(a),e=String(b),d=w-s.length-e.length;return s+'.'.repeat(Math.max(1,d))+e;};
   let t='';
@@ -778,8 +814,11 @@ function generarTextoTicket(v){
   if(S.config.direccion)t+=ctr(S.config.direccion)+'\n';
   if(S.config.telefono)t+=ctr('Tel: '+S.config.telefono)+'\n';
   t+=lin+'\n';
-  t+=`Factura #${String(v._id||'').substring(0,8).toUpperCase()}\n`;
+  const numFac=String(v.numFactura||v._id||'').substring(0,8).toUpperCase();
+  t+=`Factura #${numFac}\n`;
   t+=`Fecha: ${v.fecha}  Hora: ${v.hora||'--:--'}\n`;
+  if(v.cliente)t+=`Cliente: ${v.cliente}\n`;
+  if(v.telefono)t+=`Tel: ${v.telefono}\n`;
   t+=lin+'\n';
   v.items.forEach(i=>{
     t+=lj(i.nombre.substring(0,20),fmt(i.precio*(i.qty||1)))+'\n';
@@ -2133,6 +2172,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     margin: 0mm;
   }
   @page :first { margin: 0mm; }
+  /* Evitar impresión múltiple */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   html, body {
     width: 58mm !important;
     margin: 0 !important;
@@ -2145,31 +2186,33 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   #ticket-print {
     position: absolute !important;
     left: 0 !important; top: 0 !important;
-    width: 54mm !important;
-    max-width: 54mm !important;
+    width: 56mm !important;
+    max-width: 56mm !important;
     font-family: 'Courier New', monospace !important;
-    font-size: 11px !important;
-    line-height: 1.35 !important;
+    font-size: 14px !important;
+    line-height: 1.45 !important;
     color: #000 !important;
     background: #fff !important;
-    padding: 1mm 2mm !important;
+    padding: 1mm 1mm !important;
     margin: 0 !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
   #ticket-print pre {
     font-family: 'Courier New', monospace !important;
-    font-size: 12px !important;
-    line-height: 1.4 !important;
+    font-size: 14px !important;
+    line-height: 1.45 !important;
     color: #000 !important;
     margin: 0 !important;
-    white-space: pre !important;
+    white-space: pre-wrap !important;
+    word-break: break-all !important;
+    width: 100% !important;
   }
   #ticket-print img {
-    max-width: 40mm !important;
+    max-width: 35mm !important;
     height: auto !important;
     display: block !important;
-    margin: 0 auto 2mm auto !important;
+    margin: 0 auto 1mm auto !important;
   }
 
   /* ── Pedido media carta ── */
@@ -2299,8 +2342,19 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <div class="po" id="po-fiado" onclick="selPago('fiado')">📋 Fiado</div>
           </div>
           <div id="fiado-f" style="display:none">
-            <div class="fg mt8"><label class="fl">Nombre cliente</label><input class="fi" id="f-nom" placeholder="Nombre"></div>
+            <div class="fg mt8"><label class="fl">Nombre cliente *</label><input class="fi" id="f-nom" placeholder="Nombre"></div>
             <div class="fg mt8"><label class="fl">Teléfono</label><input class="fi" id="f-tel" placeholder="Número"></div>
+          </div>
+          <div id="cliente-opcional-f" style="margin-top:6px">
+            <details style="cursor:pointer">
+              <summary style="font-size:12px;color:var(--t2);padding:4px 0;list-style:none">
+                <span style="color:var(--t3)">▸ Agregar cliente en factura (opcional)</span>
+              </summary>
+              <div style="padding-top:8px;display:flex;flex-direction:column;gap:8px">
+                <div class="fg"><label class="fl">Nombre cliente</label><input class="fi" id="v-cli-nom" placeholder="Nombre del cliente"></div>
+                <div class="fg"><label class="fl">Teléfono</label><input class="fi" id="v-cli-tel" placeholder="300 000 0000"></div>
+              </div>
+            </details>
           </div>
           <div style="background:var(--warn-l);border:1px solid #FAC775;border-radius:var(--rs);padding:9px 12px;margin-top:10px;display:flex;align-items:center;gap:10px">
             <span style="font-size:12px;color:var(--warn);font-weight:500">🏷️ Descuento:</span>
