@@ -776,18 +776,24 @@ function renderFiados() {
   const cobr=S.fiados.filter(f=>f.estado==='cobrado');
   document.getElementById('fiados-tbody').innerHTML=[...pend,...cobr].length?[...pend,...cobr].map(f=>`
     <tr>
-      <td style="font-weight:500">${f.cliente}</td><td>${f.telefono||'—'}</td><td>${fmtF(f.fecha)}</td>
+      <td style="font-weight:500">${f.cliente}</td>
+      <td>${f.telefono||'—'}</td>
+      <td>${fmtF(f.fecha)}</td>
       <td class="mono">${fmt(f.total)}</td>
       <td class="mono" style="color:var(--danger)">${fmt(f.saldo!==undefined?f.saldo:f.total)}</td>
       <td><span class="badge ${f.estado==='pendiente'?'by':'bg'}">${f.estado==='pendiente'?'Pendiente':'Cobrado'}</span></td>
-      <td>${f.estado==='pendiente'
-        ?`<button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>`
-        :'<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
-      </td>
+      <td>
+        ${f.estado==='pendiente'
+          ? `<div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>
+              <button class="btn bsm bd" onclick="eliminarFiadoConStock('${f._id}')" title="Eliminar fiado">🗑 Eliminar</button>
+             </div>`
+          : '<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
+       </td>
     </tr>`).join('')
-    :'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">No hay fiados</td></tr>';
+    : '<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">No hay fiados</td></tr>';
 }
-window.renderFiados=renderFiados;
+window.renderFiados = renderFiados;
 
 window.abrirCobrar = function(id) {
   S.cobrandoId=id; const f=S.fiados.find(x=>x._id===id);
