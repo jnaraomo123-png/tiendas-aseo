@@ -933,7 +933,9 @@ function renderCierre(){
         <td><div style="display:flex;gap:4px">
           <button class="btn bsm" onclick="imprimirVentaHistorial('${v._id}')">🖨</button>
           ${!v.esAbono&&!v.esPedido?`<button class="btn bsm" onclick="abrirEditarVenta('${v._id}')" title="Editar">✏️</button>`:''}
-        </div></td></tr>`).join('')}
+          ${!v.esAbono&&!v.esPedido?`<button class="btn bsm bd" onclick="eliminarVentaConStock('${v._id}')" title="Eliminar venta">🗑</button>`:''}
+        </div></td>
+      </tr>`).join('')}
       </tbody></table></div>`:'<div style="color:var(--t3);font-size:13px">Sin ventas para esta fecha</div>'}
     </div>
     <div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">📋 Pendiente de cobro</div>
@@ -943,8 +945,9 @@ function renderCierre(){
         <div class="cb"><div class="cr"><span>Pedidos fiados</span><span class="mono" style="color:var(--warn)">${fmt(pedFiados)}</span></div>
         <div class="cr tot"><span>Total pedidos fiados</span><span class="mono" style="color:var(--danger)">${fmt(pedFiados)}</span></div></div>
       </div>
-    </div>`;}
-window.renderCierre=renderCierre;
+    </div>`;
+}
+window.renderCierre = renderCierre;
 
 window.exportarCierre = function() {
   const fecha=document.getElementById('caja-fecha').value||hoy();
@@ -1127,7 +1130,8 @@ function renderPedidos(){
         ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="verDetallePedido('${p._id}')" title="Cobrar pedido">✓ Cobrar</button>`:''}
         ${!esVend&&tieneSaldo?`<button class="btn bsm bp" onclick="abrirAbono('${p._id}','pedido')" title="Registrar abono">💰 Abonar</button>`:''}
         ${!esVend&&p.estado!=='cancelado'?`<button class="btn bsm" onclick="abrirEditarPedido('${p._id}')" title="Editar productos">✏️</button>`:''}
-        ${!esVend&&p.estado!=='cancelado'?`<button class="btn bsm bd" onclick="cancelarPedidoCompleto('${p._id}')" title="Cancelar pedido">❌</button>`:''}
+        ${!esVend&&p.estado!=='cancelado'&&p.pago!=='fiado'?`<button class="btn bsm bd" onclick="cancelarPedidoCompleto('${p._id}')" title="Cancelar pedido">❌</button>`:''}
+        ${!esVend&&p.estado!=='cancelado'&&p.pago==='fiado'&&(!p.abonos||p.abonos.length===0)?`<button class="btn bsm bd" onclick="eliminarPedidoFiadoConStock('${p._id}')" title="Eliminar pedido fiado">🗑</button>`:''}
       </div></td>
     </tr>`;}).join('')
     :'<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:18px">Sin pedidos</td></tr>';
@@ -1148,7 +1152,7 @@ function renderPedidos(){
       resDiv.innerHTML=`
         <div class="card" style="margin-top:14px">
           <div style="font-weight:600;font-size:14px;margin-bottom:12px">📊 Resumen por vendedor</div>
-          <div class="tw"><table><thead><tr><th>Vendedor</th><th>Total pedidos</th><th>Entregados</th><th>Pendientes</th><th>Total cobrado</th></tr></thead><tbody>
+          <div class="tw"></table><thead><tr><th>Vendedor</th><th>Total pedidos</th><th>Entregados</th><th>Pendientes</th><th>Total cobrado</th></tr></thead><tbody>
             ${[...vendMap.values()].sort((a,b)=>b.total-a.total).map(v=>`
               <tr>
                 <td style="font-weight:500">${v.nombre}</td>
