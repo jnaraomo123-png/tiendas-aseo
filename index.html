@@ -1817,7 +1817,7 @@ window.guardarEditarVenta=async function(){
   toast('Venta actualizada — nuevo total: '+fmt(totalNew));
 };
 // ══════════════════════════════════════════
-//  ELIMINAR VENTA CON DEVOLUCIÓN DE STOCK
+//  ELIMINAR VENTA CON DEVOLUCIÓN DE STOCK Y AJUSTE DE CAJA
 // ══════════════════════════════════════════
 window.eliminarVentaConStock = async function(id) {
   const venta = S.ventas.find(v => v._id === id);
@@ -1831,12 +1831,13 @@ window.eliminarVentaConStock = async function(id) {
     return;
   }
   
-  const confirmar = confirm(`¿Eliminar venta #${venta.numFactura || venta._id.slice(0,6)} por ${fmt(venta.total)}?\n\nLos productos volverán al inventario.`);
+  const confirmar = confirm(`⚠️ ELIMINAR VENTA #${venta.numFactura || venta._id.slice(0,6)}\nMonto: ${fmt(venta.total)}\nForma de pago: ${venta.pago}\n\n⚠️ ATENCIÓN: El monto se descontará del cierre de caja.\n¿Eliminar? Los productos volverán al inventario.`);
   if (!confirmar) return;
   
   try {
     mostrarCargando(true);
     
+    // 1. Devolver stock de cada producto en la venta
     for (const item of venta.items) {
       const producto = S.productos.find(p => p._id === item._id);
       if (producto) {
@@ -1853,14 +1854,17 @@ window.eliminarVentaConStock = async function(id) {
       }
     }
     
+    // 2. Marcar la venta como ANULADA en lugar de eliminarla físicamente (opcional)
+    // O simplemente eliminarla y confiar en que el cierre se actualiza
     await borrarDoc('ventas', id);
     S.ventas = S.ventas.filter(v => v._id !== id);
     
+    // 3. Actualizar todas las interfaces (el cierre de caja se recalcula automáticamente)
     renderCierre();
     renderDashboard();
     
     mostrarCargando(false);
-    toast(`✅ Venta eliminada - Stock devuelto`);
+    toast(`✅ Venta #${venta.numFactura || ''} eliminada - Stock devuelto - El dinero ya NO aparece en caja`);
     
   } catch (error) {
     mostrarCargando(false);
@@ -1877,18 +1881,26 @@ window.eliminarFiadoConStock = async function(id) {
     return;
   }
   
+  // Verificar que no tenga pagos/abonos registrados
   const tienePagos = (fiado.pagos && fiado.pagos.length > 0);
   if (tienePagos) {
-    toast('❌ No se puede eliminar: este fiado ya tiene abonos registrados', false);
+    toast('❌ No se puede eliminar: este fiado ya tiene abonos registrados en caja', false);
     return;
   }
   
-  const confirmar = confirm(`⚠️ ELIMINAR FIADO\nCliente: ${fiado.cliente}\nTotal: ${fmt(fiado.total)}\n\n¿Eliminar? Los productos volverán al inventario.`);
+  // Verificar que no esté cobrado
+  if (fiado.estado === 'cobrado') {
+    toast('❌ No se puede eliminar: este fiado ya está cobrado', false);
+    return;
+  }
+  
+  const confirmar = confirm(`⚠️ ELIMINAR FIADO\nCliente: ${fiado.cliente}\nTotal: ${fmt(fiado.total)}\nSaldo: ${fmt(fiado.saldo !== undefined ? fiado.saldo : fiado.total)}\n\n¿Eliminar? Los productos volverán al inventario.`);
   if (!confirmar) return;
   
   try {
     mostrarCargando(true);
     
+    // 1. Devolver stock de cada producto en el fiado
     if (fiado.items && fiado.items.length) {
       for (const item of fiado.items) {
         const producto = S.productos.find(p => p._id === item._id);
@@ -1907,15 +1919,18 @@ window.eliminarFiadoConStock = async function(id) {
       }
     }
     
+    // 2. Eliminar el fiado de Firestore
     await borrarDoc('fiados', id);
     S.fiados = S.fiados.filter(f => f._id !== id);
     
+    // 3. Actualizar interfaces
     renderFiados();
     renderDashboard();
+    renderCierre();
     updateBadge();
     
     mostrarCargando(false);
-    toast(`✅ Fiado de ${fiado.cliente} eliminado - Stock devuelto`);
+    toast(`✅ Fiado de ${fiado.cliente} eliminado - Stock devuelto - No afecta caja (nunca se cobró)`);
     
   } catch (error) {
     mostrarCargando(false);
@@ -1932,43 +1947,59 @@ window.eliminarPedidoFiadoConStock = async function(id) {
     return;
   }
   
+  // Solo se puede eliminar si es un pedido fiado
   if (pedido.pago !== 'fiado') {
-    toast('Este pedido no es fiado.', false);
+    toast('Este pedido no es fiado. Usa cancelar pedido normal.', false);
     return;
   }
   
+  // Verificar que no tenga abonos registrados
   const tieneAbonos = (pedido.abonos && pedido.abonos.length > 0);
   if (tieneAbonos) {
-    toast('❌ No se puede eliminar: este pedido fiado ya tiene abonos registrados', false);
+    toast('❌ No se puede eliminar: este pedido fiado ya tiene abonos registrados en caja', false);
     return;
   }
   
-  const confirmar = confirm(`⚠️ ELIMINAR PEDIDO FIADO\nCliente: ${pedido.cliente}\nTotal: ${fmt(pedido.total)}\n\n¿Eliminar? Los productos volverán al inventario.`);
+  // Verificar que no esté entregado (si está entregado como fiado, no se puede eliminar)
+  if (pedido.estado === 'entregado') {
+    toast('❌ No se puede eliminar: este pedido ya fue entregado', false);
+    return;
+  }
+  
+  const confirmar = confirm(`⚠️ ELIMINAR PEDIDO FIADO\nCliente: ${pedido.cliente}\nTotal: ${fmt(pedido.total)}\nEstado: ${pedido.estado}\n\n¿Eliminar? Los productos volverán al inventario.`);
   if (!confirmar) return;
   
   try {
     mostrarCargando(true);
     
+    // 1. Devolver stock de cada producto en el pedido
     for (const item of pedido.items || []) {
       const producto = S.productos.find(p => p._id === item._id);
       if (producto) {
-        const cantidad = item.tipo === 'granel' ? (item.cantGranel || 0) : (item.qty || 1);
-        if (cantidad > 0) {
-          producto.stock += cantidad;
+        let cantidadADevolver = 0;
+        if (item.tipo === 'granel') {
+          cantidadADevolver = item.cantGranel || 0;
+        } else {
+          cantidadADevolver = item.qty || 1;
+        }
+        if (cantidadADevolver > 0) {
+          producto.stock += cantidadADevolver;
           await guardarDoc('productos', producto._id, { stock: producto.stock });
         }
       }
     }
     
+    // 2. Eliminar el pedido de Firestore
     await borrarDoc('pedidos', id);
     S.pedidos = S.pedidos.filter(p => p._id !== id);
     
+    // 3. Actualizar interfaces
     renderPedidos();
     renderDashboard();
     updateBadgePedidos();
     
     mostrarCargando(false);
-    toast(`✅ Pedido fiado de ${pedido.cliente} eliminado - Stock devuelto`);
+    toast(`✅ Pedido fiado de ${pedido.cliente} eliminado - Stock devuelto - No afecta caja (nunca se cobró)`);
     
   } catch (error) {
     mostrarCargando(false);
