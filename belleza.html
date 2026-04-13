@@ -80,9 +80,13 @@ async function cargarDatos() {
   mostrarCargando(true);
   try {
     const [prods, ventas, fiados, pedidos, gastos, proveedores, cfgSnap] = await Promise.all([
-      leerCol('productos'), leerCol('ventas'), leerCol('fiados'),
-      leerCol('pedidos'), leerCol('gastos'), leerCol('proveedores'),
-      getDoc(cfgDoc())
+      leerCol('productos').catch(()=>[]),
+      leerCol('ventas').catch(()=>[]),
+      leerCol('fiados').catch(()=>[]),
+      leerCol('pedidos').catch(()=>[]),
+      leerCol('gastos').catch(()=>[]),
+      leerCol('proveedores').catch(()=>[]),
+      getDoc(cfgDoc()).catch(()=>({exists:()=>false}))
     ]);
     S.productos   = prods;
     S.ventas      = ventas;
@@ -91,11 +95,14 @@ async function cargarDatos() {
     S.gastos      = gastos;
     S.proveedores = proveedores;
     if (cfgSnap.exists()) S.config = { ...S.config, ...cfgSnap.data() };
-    const cajaMayorSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'));
-    if(cajaMayorSnap.exists()) S.cajaMayor = {...S.cajaMayor, ...cajaMayorSnap.data()};
-    // Cargar contador de facturas
-    const contSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'contador'));
-    if(contSnap.exists()) S.contadorFactura = contSnap.data().ultimo||0;
+    try {
+      const cajaMayorSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'));
+      if(cajaMayorSnap.exists()) S.cajaMayor = {...S.cajaMayor, ...cajaMayorSnap.data()};
+    } catch(e) { console.log('cajaMayor no inicializada aún'); }
+    try {
+      const contSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'contador'));
+      if(contSnap.exists()) S.contadorFactura = contSnap.data().ultimo||0;
+    } catch(e) { console.log('contador no inicializado aún'); }
     const email = auth.currentUser?.email||'';
     const vendedores = S.config.vendedores||[];
     S.rol = vendedores.includes(email) ? 'vendedor' : 'dueno';
@@ -128,6 +135,9 @@ function mostrarCargando(v) {
 // ══════════════════════════════════════════
 //  AUTH
 // ══════════════════════════════════════════
+// Cerrar sesión al cargar la página para pedir contraseña siempre
+signOut(auth).catch(()=>{});
+
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     document.getElementById('login-screen').style.display = 'none';
@@ -826,8 +836,8 @@ function generarTextoTicket(v){
 
 function mostrarTicket(v){
   const txt=generarTextoTicket(v);
-  document.getElementById('ticket-preview').innerHTML='<div style="text-align:center;margin-bottom:6px"><span style="font-size:32px;display:block;text-align:center">💅</span></div><pre style="white-space:pre;font-family:Courier New,monospace;font-size:11px;line-height:1.5">'+txt+'</pre>';
-  document.getElementById('ticket-print').innerHTML='<div style="text-align:center;margin-bottom:4px"><span style="font-size:32px;display:block;text-align:center">💅</span></div><pre style="font-family:Courier New,monospace;font-size:11px;line-height:1.5;color:#000;margin:0">'+txt+'</pre>';
+  document.getElementById('ticket-preview').innerHTML='<div style="text-align:center;margin-bottom:6px"><span style="font-size:24px;display:block;text-align:center">\uD83D\uDC85</span></div><pre style="white-space:pre;font-family:Courier New,monospace;font-size:11px;line-height:1.5">'+txt+'</pre>';
+  document.getElementById('ticket-print').innerHTML='<div style="text-align:center;margin-bottom:4px"><span style="font-size:32px;display:block;text-align:center">\uD83D\uDC85</span></div><pre style="font-family:Courier New,monospace;font-size:11px;line-height:1.5;color:#000;margin:0">'+txt+'</pre>';
   document.getElementById('ticket-print').style.display='block';
   document.getElementById('pedido-print').style.display='none';
   abrirMo('mo-ticket');
@@ -1421,7 +1431,7 @@ window.imprimirPedido=function(id){
     <div style="font-family:Arial,sans-serif;font-size:11px;color:#000;width:100%">
       <!-- ENCABEZADO -->
       <div style="text-align:center;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:8px;display:flex;align-items:center;gap:12px">
-        <span style="font-size:36px;display:block;text-align:center">💅</span>
+        <span style="font-size:32px">\uD83D\uDC85</span>
         <div style="text-align:left">
           <div style="font-size:16px;font-weight:bold;letter-spacing:1px">${nombre}</div>
           ${dir?`<div style="font-size:10px;margin-top:2px">📍 ${dir}</div>`:''}
@@ -2080,13 +2090,13 @@ function goTo(p){if(window.goTo)window.goTo(p);}
 
 <style>
 :root{
-  --bg:#FDF0F5;--surface:#FFF;--s2:#F8E6F0;--border:#E8C8D8;
-  --text:#1E0A14;--t2:#6B3050;--t3:#A87090;
-  --accent:#C2185B;--a-l:#FCE4EC;--a-d:#880E4F;
+  --bg:#F0F4F8;--surface:#FFF;--s2:#E8EEF5;--border:#C8D4E0;
+  --text:#0F1C2E;--t2:#4A6080;--t3:#8099B3;
+  --accent:#E8720C;--a-l:#FEF0E6;--a-d:#C45A00;
   --danger:#D83030;--danger-l:#FAEBEB;
   --warn:#BA7517;--warn-l:#FAEEDA;
   --info:#7B1FA2;--info-l:#F3E5F5;
-  --purple:#6A1B9A;--purple-l:#EDE7F6;
+  --purple:#534AB7;--purple-l:#EEEDFE;
   --navy:#4A148C;--navy-l:#EDE7F6;--navy-d:#2E0060;
   --r:10px;--rs:6px;
 }
@@ -2105,7 +2115,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);fon
 .main{flex:1;overflow-y:auto;background:var(--bg)}
 .brand{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.1)}
 .brand-name{font-size:15px;font-weight:600;letter-spacing:-.3px;color:#fff}
-.brand-user{font-size:11px;color:rgba(255,255,255,.5);margin-top:2px;font-family:'DM Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-user{display:none}
 .nav{padding:6px 0;flex:1}
 .nav-item{display:flex;align-items:center;gap:9px;padding:9px 16px;cursor:pointer;color:rgba(255,255,255,.65);font-size:13px;border-left:3px solid transparent;transition:all .12s}
 .nav-item:hover{color:#fff;background:rgba(255,255,255,.08)}
@@ -2244,7 +2254,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 
 <div id="login-screen">
   <div class="login-box">
-    <div class="login-logo" style="font-size:52px;margin-bottom:4px">💅</div>
+    <div class="login-logo" style="font-size:48px;margin-bottom:4px">💅</div>
     <div class="login-title">Tienda de Aseo</div>
     <div class="login-sub">Inicia sesión con tu cuenta</div>
     <div class="login-err" id="login-err"></div>
@@ -2259,7 +2269,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 <div class="app" id="app-wrap" style="display:none">
   <div class="sidebar">
     <div class="brand">
-      <div style="display:flex;align-items:center;gap:8px"><span style="font-size:22px">💅</span><div class="brand-name" id="brand-name" style="font-size:13px">Tienda de Belleza</div></div></div>
+      <div style="display:flex;align-items:center;gap:8px"><span style="font-size:24px;display:block;text-align:center">💅</span><div class="brand-name" id="brand-name" style="font-size:13px">Aseo Total</div></div>
       <div class="brand-user" id="brand-user"></div>
     </div>
     <nav class="nav">
