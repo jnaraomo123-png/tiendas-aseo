@@ -206,7 +206,14 @@ window.goTo = function(p) {
 // ══════════════════════════════════════════
 //  UTILS
 // ══════════════════════════════════════════
-function hoy()  { return new Date().toISOString().split('T')[0]; }
+function hoy()  {
+  const d = new Date();
+  // Usar fecha local Colombia (no UTC) para evitar problemas en la noche
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 function fmt(n) { return '$'+Number(n||0).toLocaleString('es-CO'); }
 function fmtF(s){ return new Date(s+'T00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}); }
 function toast(msg, ok=true) {
@@ -614,7 +621,7 @@ function renderCarrito() {
       <div style="flex:1;min-width:0"><div style="font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.nombre}</div>
         <div style="font-size:11px;color:var(--t3)">${c.tipo==='granel'?fmt(c.precio)+' total':fmt(c.precio)+' c/u'}${c.precioMayor&&c.qty>=c.cantMinMayor?'<span style="color:var(--purple);margin-left:4px">🏷️ Mayor</span>':''}</div></div>
       <div class="qc">
-        ${c.tipo==='unidad'?`<div class="qb" onclick="chgQty(${i},-1)">−</div><span style="font-weight:500;min-width:20px;text-align:center">${c.qty}</span><div class="qb" onclick="chgQty(${i},1)">+</div>`:''}
+        ${c.tipo==='unidad'?`<div class="qb" onclick="chgQty(${i},-1)">−</div><input type="number" min="1" max="${c.maxStock||999}" value="${c.qty}" onchange="setQty(${i},this.value)" onclick="this.select()" style="width:40px;text-align:center;font-weight:600;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);padding:2px 4px;font-family:inherit">${'+'}<div class="qb" onclick="chgQty(${i},1)">+</div>`:''}
         <span style="font-weight:500;min-width:60px;text-align:right;font-size:13px">${fmt(c.precio*c.qty)}</span>
         <div class="qb" onclick="quitarItem(${i})" style="color:var(--danger)">×</div>
       </div>
@@ -640,6 +647,19 @@ window.chgQty = function(i,d) {
 };
 
 window.quitarItem=(i)=>{S.carrito.splice(i,1);renderCarrito();};
+
+window.setQty=function(i,val){
+  const c=S.carrito[i];
+  const p=S.productos.find(x=>x._id===c._id);
+  let qty=parseInt(val)||1;
+  if(qty<1)qty=1;
+  if(qty>p.stock){qty=p.stock;toast('Máximo stock: '+p.stock,false);}
+  c.qty=qty;
+  if(c.tipo==='unidad'&&c.precioMayor&&c.cantMinMayor){
+    c.precio=c.qty>=c.cantMinMayor?c.precioMayor:c.precioNormal;
+  }
+  renderCarrito();
+};
 window.limpiarCarrito=function(){
   S.carrito=[];S.pagoTipo='efectivo';selPago('efectivo');renderCarrito();
   const d=document.getElementById('v-descuento');if(d)d.value='';
@@ -1214,7 +1234,7 @@ function renderPedidoCarrito(){
         <span style="flex:1;font-weight:500">${c.nombre}${c.precio!==c.precioNormal?'<span style="font-size:10px;color:var(--purple);margin-left:4px">🏷️Mayor</span>':''}</span>
         <div style="display:flex;align-items:center;gap:5px">
           <div class="qb" onclick="chgQtyPed(${i},-1)">−</div>
-          <span style="font-weight:500;min-width:20px;text-align:center">${c.qty}</span>
+          <input type="number" min="1" value="${c.qty}" onchange="setQtyPed(${i},this.value)" onclick="this.select()" style="width:40px;text-align:center;font-weight:600;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);padding:2px 4px;font-family:inherit">
           <div class="qb" onclick="chgQtyPed(${i},1)">+</div>
           <span style="min-width:64px;text-align:right;font-weight:500">${fmt(c.precio*c.qty)}</span>
           <div class="qb" onclick="quitarProdPed(${i})" style="color:var(--danger)">×</div>
@@ -1233,6 +1253,15 @@ window.chgQtyPed=function(i,d){
   renderPedidoCarrito();
 };
 window.quitarProdPed=function(i){pedidoCarrito.splice(i,1);renderPedidoCarrito();};
+
+window.setQtyPed=function(i,val){
+  let qty=parseInt(val)||1;
+  if(qty<1)qty=1;
+  pedidoCarrito[i].qty=qty;
+  const c=pedidoCarrito[i];
+  if(c.precioMayor&&c.cantMinMayor) c.precio=c.qty>=c.cantMinMayor?c.precioMayor:c.precioNormal;
+  renderPedidoCarrito();
+};
 
 window.guardarPedido=async function(){
   const cliente=document.getElementById('ped-cliente').value.trim();
@@ -1533,7 +1562,7 @@ function renderEditarPedidoItems(){
         <div style="flex:1"><div style="font-weight:500">${it.nombre}</div><div style="font-size:11px;color:var(--t3)">${fmt(it.precio)} c/u</div></div>
         <div style="display:flex;align-items:center;gap:5px">
           <div class="qb" onclick="chgQtyEditPed(${i},-1)">−</div>
-          <span style="font-weight:500;min-width:20px;text-align:center">${it.qty||1}</span>
+          <input type="number" min="1" value="${it.qty||1}" onchange="setQtyEditPed(${i},this.value)" onclick="this.select()" style="width:40px;text-align:center;font-weight:600;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);padding:2px 4px;font-family:inherit">
           <div class="qb" onclick="chgQtyEditPed(${i},1)">+</div>
           <span style="min-width:64px;text-align:right;font-weight:500">${fmt(it.precio*(it.qty||1))}</span>
           <div class="qb" onclick="quitarItemEditPed(${i})" style="color:var(--danger)">×</div>
@@ -1549,6 +1578,13 @@ window.chgQtyEditPed=function(i,d){
   renderEditarPedidoItems();
 };
 window.quitarItemEditPed=function(i){_editPedidoItems.splice(i,1);renderEditarPedidoItems();};
+
+window.setQtyEditPed=function(i,val){
+  let qty=parseInt(val)||1;
+  if(qty<1)qty=1;
+  _editPedidoItems[i].qty=qty;
+  renderEditarPedidoItems();
+};
 
 window.buscarProdEditarPed=function(){
   const q=document.getElementById('editar-ped-search').value.toLowerCase();
@@ -1679,7 +1715,7 @@ function renderEditarVentaItems(){
         <div style="flex:1"><div style="font-weight:500">${it.nombre}</div><div style="font-size:11px;color:var(--t3)">${fmt(it.precio)} c/u</div></div>
         <div style="display:flex;align-items:center;gap:5px">
           <div class="qb" onclick="chgQtyEditVenta(${i},-1)">−</div>
-          <span style="font-weight:500;min-width:20px;text-align:center">${it.qty||1}</span>
+          <input type="number" min="1" value="${it.qty||1}" onchange="setQtyEditVenta(${i},this.value)" onclick="this.select()" style="width:40px;text-align:center;font-weight:600;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);padding:2px 4px;font-family:inherit">
           <div class="qb" onclick="chgQtyEditVenta(${i},1)">+</div>
           <span style="min-width:64px;text-align:right;font-weight:500">${fmt(it.precio*(it.qty||1))}</span>
           <div class="qb" onclick="quitarItemEditVenta(${i})" style="color:var(--danger)">×</div>
@@ -1695,6 +1731,13 @@ window.chgQtyEditVenta=function(i,d){
   renderEditarVentaItems();
 };
 window.quitarItemEditVenta=function(i){_editVentaItems.splice(i,1);renderEditarVentaItems();};
+
+window.setQtyEditVenta=function(i,val){
+  let qty=parseInt(val)||1;
+  if(qty<1)qty=1;
+  _editVentaItems[i].qty=qty;
+  renderEditarVentaItems();
+};
 
 window.buscarProdEditarVenta=function(){
   const q=document.getElementById('editar-venta-search').value.toLowerCase();
