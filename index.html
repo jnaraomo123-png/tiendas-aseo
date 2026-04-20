@@ -71,6 +71,7 @@ let S = {
   gastos:[], proveedores:[],
   cajaMayor:{saldo:0, movimientos:[]},
   contadorFactura:0,
+  saldoBaseCaja:0,
 };
 
 // ══════════════════════════════════════════
@@ -103,6 +104,10 @@ async function cargarDatos() {
       const contSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'contador'));
       if(contSnap.exists()) S.contadorFactura = contSnap.data().ultimo||0;
     } catch(e) { console.log('contador no inicializado aún'); }
+    try {
+      const baseSnap = await getDoc(doc(db, 'negocios', uidActivo(), 'config', 'saldoBase'));
+      if(baseSnap.exists()) S.saldoBaseCaja = baseSnap.data().monto||0;
+    } catch(e) { console.log('saldoBase no inicializado aún'); }
     const email = auth.currentUser?.email||'';
     const vendedores = S.config.vendedores||[];
     S.rol = vendedores.includes(email) ? 'vendedor' : 'dueno';
@@ -114,7 +119,7 @@ async function cargarDatos() {
 function aplicarRol() {
   const esVendedor = S.rol === 'vendedor';
   // Ocultar secciones según rol
-  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-cajaMayor','nav-reporte','nav-config','nav-gastos','nav-proveedores'];
+  const solodueno = ['nav-venta','nav-fiados','nav-caja','nav-cajaMayor','nav-reporte','nav-config','nav-gastos','nav-proveedores','nav-cotizacion'];
   solodueno.forEach(id => {
     const el = document.getElementById(id);
     if(el) el.style.display = esVendedor ? 'none' : 'flex';
@@ -136,7 +141,7 @@ function mostrarCargando(v) {
 //  AUTH
 // ══════════════════════════════════════════
 // Cerrar sesión al cargar la página para pedir contraseña siempre
-signOut(auth).catch(()=>{});
+try { signOut(auth); } catch(_) {}
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
@@ -201,6 +206,7 @@ window.goTo = function(p) {
   if(p==='proveedores') renderProveedores();
   if(p==='config') renderConfig();
   if(p==='pedidos') renderPedidos();
+  if(p==='cotizacion') {/* página estática, no necesita render */}
 };
 
 // ══════════════════════════════════════════
@@ -250,6 +256,25 @@ function renderDashboard() {
   const bajo=S.productos.filter(p=>p.stock<=p.min).length;
   const totalCompra=S.productos.reduce((a,p)=>a+(p.tipo==='granel'?(p.compra||0):(p.compra||0)*(p.stock||0)),0);
   const totalVenta=S.productos.reduce((a,p)=>a+(p.tipo==='granel'?(p.venta||0):(p.venta||0)*(p.stock||0)),0);
+  // Utilidad real = (precio venta - precio compra) * qty vendida
+  const calcUtilidad=(ventas)=>{
+    let u=0;
+    ventas.forEach(v=>{
+      if(v.pago==='fiado')return;
+      (v.items||[]).forEach(item=>{
+        const prod=S.productos.find(p=>p._id===item._id);
+        const compra=prod?prod.compra||0:0;
+        const venta=item.precio||0;
+        const qty=item.tipo==='granel'?item.cantGranel||1:item.qty||1;
+        u+=(venta-compra)*qty;
+      });
+    });
+    return u;
+  };
+  const utilidadHoy=calcUtilidad(S.ventas.filter(v=>v.fecha===td));
+  const mesActualStr=td.substring(0,7);
+  const utilidadMes=calcUtilidad(S.ventas.filter(v=>v.fecha.startsWith(mesActualStr)));
+  const mesActual=new Date().toLocaleDateString('es-CO',{month:'long'});
   const sg=document.getElementById('stats-grid');
   if(sg) sg.innerHTML=`
     <div class="sc"><div class="sc-label">Ventas hoy</div><div class="sc-val g">${fmt(ef+tr)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${vhoy.length} ventas</div></div>
@@ -260,7 +285,9 @@ function renderDashboard() {
     <div class="sc"><div class="sc-label">Inventario compra</div><div class="sc-val b" style="font-size:15px">${fmt(totalCompra)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${S.productos.length} productos</div></div>
     <div class="sc"><div class="sc-label">Inventario venta</div><div class="sc-val g" style="font-size:15px">${fmt(totalVenta)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Ganancia pot: ${fmt(totalVenta-totalCompra)}</div></div>
     <div class="sc"><div class="sc-label">Stock bajo</div><div class="sc-val ${bajo>0?'o':''}">${bajo}</div></div>
-    <div class="sc" style="cursor:pointer;border:2px solid var(--a-l)" onclick="goTo('cajaMayor')"><div class="sc-label">🏦 Caja Mayor</div><div class="sc-val g">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">saldo acumulado</div></div>`;
+    <div class="sc" style="cursor:pointer;border:2px solid var(--a-l)" onclick="goTo('cajaMayor')"><div class="sc-label">🏦 Caja Mayor</div><div class="sc-val g">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">saldo acumulado</div></div>
+    <div class="sc" style="border:2px solid ${utilidadHoy>=0?'var(--info-l)':'var(--danger-l)'}"><div class="sc-label">💹 Utilidad hoy</div><div class="sc-val ${utilidadHoy>=0?'g':'o'}" style="font-size:16px">${fmt(utilidadHoy)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">margen bruto hoy</div></div>
+    <div class="sc" style="border:2px solid ${utilidadMes>=0?'var(--info-l)':'var(--danger-l)'}"><div class="sc-label">📅 Utilidad del mes</div><div class="sc-val ${utilidadMes>=0?'g':'o'}" style="font-size:16px">${fmt(utilidadMes)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">margen bruto ${mesActual}</div></div>`;
   const dv=document.getElementById('dash-ventas');
   const ult=S.ventas.filter(v=>v.fecha===td).slice(-5).reverse();
   if(dv) dv.innerHTML=ult.length?ult.map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px"><div><span style="font-weight:500">${fmt(v.total)}</span><span class="badge ${v.pago==='efectivo'?'bb':v.pago==='transferencia'?'bpu':'by'}" style="margin-left:6px">${v.pago}</span></div><div style="color:var(--t3);font-size:11px">${v.hora||''}</div></div>`).join(''):'<div style="color:var(--t3);font-size:13px;padding:6px 0">Sin ventas hoy</div>';
@@ -707,7 +734,7 @@ window.procesarVenta = async function() {
     const cliNomEf=document.getElementById('v-cli-nom')?.value.trim()||'';
     const cliTelEf=document.getElementById('v-cli-tel')?.value.trim()||'';
     S._ventaPendiente={total,descuento,subtotal,numFactura:numFacEf,
-      cliente:cliNomEf||null,telefono:cliTelEf||null,
+      cliente:cliNomEf||undefined,telefono:cliTelEf||undefined,
       items:S.carrito.map(c=>({...c})),hora};
     document.getElementById('vueltos-total').textContent=fmt(total);
     document.getElementById('pago-cliente').value='';
@@ -720,11 +747,12 @@ window.procesarVenta = async function() {
     const cliNom=document.getElementById('v-cli-nom')?.value.trim()||'';
     const cliTel=document.getElementById('v-cli-tel')?.value.trim()||'';
     const vData={fecha:hoy(),hora,pago:'transferencia',total,descuento:descuento||0,subtotal:subtotal||total,
-      numFactura:numFac,cliente:cliNom||null,telefono:cliTel||null,
+      numFactura:numFac,cliente:cliNom||undefined,telefono:cliTel||undefined,
       items:S.carrito.map(c=>({...c})),pagoCliente:total,vueltos:0};
     const vId=await agregarDoc('ventas',vData);
     S.ventas.push({_id:vId,...vData});
-    await descontarStock(); window.limpiarCarrito(); toast('Venta #'+numFac+' — '+fmt(total));
+    await descontarStock(); window.limpiarCarrito(); renderDashboard(); if(document.getElementById('page-inventario')?.classList.contains('active')) renderInventario();
+    toast('Venta #'+numFac+' — '+fmt(total));
     mostrarTicket({_id:vId,...vData});
   }
 };
@@ -764,6 +792,7 @@ window.confirmarEfectivo = async function() {
   const vId=await agregarDoc('ventas',vData);
   S.ventas.push({_id:vId,...vData});
   await descontarStock(); cerrarMo('mo-vueltos'); window.limpiarCarrito(); updateBadge();
+  renderDashboard(); if(document.getElementById('page-inventario')?.classList.contains('active')) renderInventario();
   toast('Venta #'+(vp.numFactura||'')+'  Vueltos: '+fmt(vuelto));
   mostrarTicket({_id:vId,...vData});
 };
@@ -776,24 +805,18 @@ function renderFiados() {
   const cobr=S.fiados.filter(f=>f.estado==='cobrado');
   document.getElementById('fiados-tbody').innerHTML=[...pend,...cobr].length?[...pend,...cobr].map(f=>`
     <tr>
-      <td style="font-weight:500">${f.cliente}</td>
-      <td>${f.telefono||'—'}</td>
-      <td>${fmtF(f.fecha)}</td>
+      <td style="font-weight:500">${f.cliente}</td><td>${f.telefono||'—'}</td><td>${fmtF(f.fecha)}</td>
       <td class="mono">${fmt(f.total)}</td>
       <td class="mono" style="color:var(--danger)">${fmt(f.saldo!==undefined?f.saldo:f.total)}</td>
       <td><span class="badge ${f.estado==='pendiente'?'by':'bg'}">${f.estado==='pendiente'?'Pendiente':'Cobrado'}</span></td>
-      <td>
-        ${f.estado==='pendiente'
-          ? `<div style="display:flex;gap:4px;flex-wrap:wrap">
-              <button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>
-              <button class="btn bsm bd" onclick="eliminarFiadoConStock('${f._id}')" title="Eliminar fiado">🗑 Eliminar</button>
-             </div>`
-          : '<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
-       </td>
+      <td>${f.estado==='pendiente'
+        ?`<button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>`
+        :'<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
+      </td>
     </tr>`).join('')
-    : '<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">No hay fiados</td></tr>';
+    :'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">No hay fiados</td></tr>';
 }
-window.renderFiados = renderFiados;
+window.renderFiados=renderFiados;
 
 window.abrirCobrar = function(id) {
   S.cobrandoId=id; const f=S.fiados.find(x=>x._id===id);
@@ -899,8 +922,14 @@ function renderCierre(){
   const totalCobrado=ef+tr;
   const cajaFinal=totalCobrado-totalGastos;
 
+  const base = S.saldoBaseCaja || 0;
+  const totalEnCaja = (totalCobrado - totalGastos) + base;
   document.getElementById('cierre-content').innerHTML=`
     <div class="alert ai">📅 Cierre del ${fmtF(fecha)} — Los fiados NO cuentan hasta ser cobrados o abonados.</div>
+    ${base>0?`<div style="background:var(--navy-l);border:1px solid var(--navy);border-radius:var(--rs);padding:11px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-weight:600;color:var(--navy)">💰 Base en caja (del cierre anterior)</span>
+      <span class="mono" style="font-weight:700;font-size:15px;color:var(--navy)">${fmt(base)}</span>
+    </div>`:''}
     <div class="cg">
       <div class="cb"><div style="font-weight:600;font-size:14px;margin-bottom:11px">💵 Dinero recibido hoy</div>
         <div class="cr"><span>Efectivo ventas</span><span class="mono" style="color:var(--info)">${fmt(ef-abonosEf)}</span></div>
@@ -915,9 +944,13 @@ function renderCierre(){
         ${totalGastos===0?`<div class="cr"><span style="color:var(--t3)">Sin gastos hoy</span><span></span></div>`:''}
         <div class="cr tot"><span>Total gastos</span><span class="mono" style="color:var(--danger)">${fmt(totalGastos)}</span></div>
         <div style="margin-top:10px;background:${cajaFinal>=0?'var(--a-l)':'var(--danger-l)'};border-radius:var(--rs);padding:10px;display:flex;justify-content:space-between;align-items:center">
-          <span style="font-weight:600;font-size:13px">💰 Saldo en caja</span>
+          <span style="font-weight:600;font-size:13px">💵 Saldo del día (sin base)</span>
           <span class="mono" style="font-weight:700;font-size:16px;color:${cajaFinal>=0?'var(--a-d)':'var(--danger)'}">${fmt(cajaFinal)}</span>
         </div>
+        ${base>0?`<div style="margin-top:8px;background:var(--navy-l);border-radius:var(--rs);padding:10px;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:700;font-size:14px;color:var(--navy)">🏦 TOTAL REAL EN CAJA (base + día)</span>
+          <span class="mono" style="font-weight:700;font-size:18px;color:var(--navy)">${fmt(totalEnCaja)}</span>
+        </div>`:''}
       </div>
     </div>
     ${gastosDia.length?`<div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">💸 Detalle de gastos del día</div>
@@ -939,9 +972,7 @@ function renderCierre(){
         <td><div style="display:flex;gap:4px">
           <button class="btn bsm" onclick="imprimirVentaHistorial('${v._id}')">🖨</button>
           ${!v.esAbono&&!v.esPedido?`<button class="btn bsm" onclick="abrirEditarVenta('${v._id}')" title="Editar">✏️</button>`:''}
-          ${!v.esAbono&&!v.esPedido?`<button class="btn bsm bd" onclick="eliminarVentaConStock('${v._id}')" title="Eliminar venta">🗑</button>`:''}
-        </div></td>
-      </tr>`).join('')}
+        </div></td></tr>`).join('')}
       </tbody></table></div>`:'<div style="color:var(--t3);font-size:13px">Sin ventas para esta fecha</div>'}
     </div>
     <div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">📋 Pendiente de cobro</div>
@@ -951,9 +982,8 @@ function renderCierre(){
         <div class="cb"><div class="cr"><span>Pedidos fiados</span><span class="mono" style="color:var(--warn)">${fmt(pedFiados)}</span></div>
         <div class="cr tot"><span>Total pedidos fiados</span><span class="mono" style="color:var(--danger)">${fmt(pedFiados)}</span></div></div>
       </div>
-    </div>`;
-}
-window.renderCierre = renderCierre;
+    </div>`;}
+window.renderCierre=renderCierre;
 
 window.exportarCierre = function() {
   const fecha=document.getElementById('caja-fecha').value||hoy();
@@ -1136,8 +1166,7 @@ function renderPedidos(){
         ${!esVend&&p.estado==='pendiente'?`<button class="btn bsm bp" onclick="verDetallePedido('${p._id}')" title="Cobrar pedido">✓ Cobrar</button>`:''}
         ${!esVend&&tieneSaldo?`<button class="btn bsm bp" onclick="abrirAbono('${p._id}','pedido')" title="Registrar abono">💰 Abonar</button>`:''}
         ${!esVend&&p.estado!=='cancelado'?`<button class="btn bsm" onclick="abrirEditarPedido('${p._id}')" title="Editar productos">✏️</button>`:''}
-        ${!esVend&&p.estado!=='cancelado'&&p.pago!=='fiado'?`<button class="btn bsm bd" onclick="cancelarPedidoCompleto('${p._id}')" title="Cancelar pedido">❌</button>`:''}
-        ${!esVend&&p.estado!=='cancelado'&&p.pago==='fiado'&&(!p.abonos||p.abonos.length===0)?`<button class="btn bsm bd" onclick="eliminarPedidoFiadoConStock('${p._id}')" title="Eliminar pedido fiado">🗑</button>`:''}
+        ${!esVend&&p.estado!=='cancelado'?`<button class="btn bsm bd" onclick="cancelarPedidoCompleto('${p._id}')" title="Cancelar pedido">❌</button>`:''}
       </div></td>
     </tr>`;}).join('')
     :'<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:18px">Sin pedidos</td></tr>';
@@ -1158,7 +1187,7 @@ function renderPedidos(){
       resDiv.innerHTML=`
         <div class="card" style="margin-top:14px">
           <div style="font-weight:600;font-size:14px;margin-bottom:12px">📊 Resumen por vendedor</div>
-          <div class="tw"></table><thead><tr><th>Vendedor</th><th>Total pedidos</th><th>Entregados</th><th>Pendientes</th><th>Total cobrado</th></tr></thead><tbody>
+          <div class="tw"><table><thead><tr><th>Vendedor</th><th>Total pedidos</th><th>Entregados</th><th>Pendientes</th><th>Total cobrado</th></tr></thead><tbody>
             ${[...vendMap.values()].sort((a,b)=>b.total-a.total).map(v=>`
               <tr>
                 <td style="font-weight:500">${v.nombre}</td>
@@ -1817,196 +1846,6 @@ window.guardarEditarVenta=async function(){
   toast('Venta actualizada — nuevo total: '+fmt(totalNew));
 };
 // ══════════════════════════════════════════
-//  ELIMINAR VENTA CON DEVOLUCIÓN DE STOCK Y AJUSTE DE CAJA
-// ══════════════════════════════════════════
-window.eliminarVentaConStock = async function(id) {
-  const venta = S.ventas.find(v => v._id === id);
-  if (!venta) {
-    toast('Venta no encontrada', false);
-    return;
-  }
-  
-  if (venta.esAbono || venta.esPedido) {
-    toast('No se pueden eliminar abonos o pedidos de esta forma', false);
-    return;
-  }
-  
-  const confirmar = confirm(`⚠️ ELIMINAR VENTA #${venta.numFactura || venta._id.slice(0,6)}\nMonto: ${fmt(venta.total)}\nForma de pago: ${venta.pago}\n\n⚠️ ATENCIÓN: El monto se descontará del cierre de caja.\n¿Eliminar? Los productos volverán al inventario.`);
-  if (!confirmar) return;
-  
-  try {
-    mostrarCargando(true);
-    
-    // 1. Devolver stock de cada producto en la venta
-    for (const item of venta.items) {
-      const producto = S.productos.find(p => p._id === item._id);
-      if (producto) {
-        let cantidadADevolver = 0;
-        if (item.tipo === 'granel') {
-          cantidadADevolver = item.cantGranel || 0;
-        } else {
-          cantidadADevolver = item.qty || 1;
-        }
-        if (cantidadADevolver > 0) {
-          producto.stock += cantidadADevolver;
-          await guardarDoc('productos', producto._id, { stock: producto.stock });
-        }
-      }
-    }
-    
-    // 2. Marcar la venta como ANULADA en lugar de eliminarla físicamente (opcional)
-    // O simplemente eliminarla y confiar en que el cierre se actualiza
-    await borrarDoc('ventas', id);
-    S.ventas = S.ventas.filter(v => v._id !== id);
-    
-    // 3. Actualizar todas las interfaces (el cierre de caja se recalcula automáticamente)
-    renderCierre();
-    renderDashboard();
-    
-    mostrarCargando(false);
-    toast(`✅ Venta #${venta.numFactura || ''} eliminada - Stock devuelto - El dinero ya NO aparece en caja`);
-    
-  } catch (error) {
-    mostrarCargando(false);
-    toast('Error: ' + error.message, false);
-  }
-};
-// ══════════════════════════════════════════
-//  ELIMINAR FIADO CON DEVOLUCIÓN DE STOCK
-// ══════════════════════════════════════════
-window.eliminarFiadoConStock = async function(id) {
-  const fiado = S.fiados.find(f => f._id === id);
-  if (!fiado) {
-    toast('Fiado no encontrado', false);
-    return;
-  }
-  
-  // Verificar que no tenga pagos/abonos registrados
-  const tienePagos = (fiado.pagos && fiado.pagos.length > 0);
-  if (tienePagos) {
-    toast('❌ No se puede eliminar: este fiado ya tiene abonos registrados en caja', false);
-    return;
-  }
-  
-  // Verificar que no esté cobrado
-  if (fiado.estado === 'cobrado') {
-    toast('❌ No se puede eliminar: este fiado ya está cobrado', false);
-    return;
-  }
-  
-  const confirmar = confirm(`⚠️ ELIMINAR FIADO\nCliente: ${fiado.cliente}\nTotal: ${fmt(fiado.total)}\nSaldo: ${fmt(fiado.saldo !== undefined ? fiado.saldo : fiado.total)}\n\n¿Eliminar? Los productos volverán al inventario.`);
-  if (!confirmar) return;
-  
-  try {
-    mostrarCargando(true);
-    
-    // 1. Devolver stock de cada producto en el fiado
-    if (fiado.items && fiado.items.length) {
-      for (const item of fiado.items) {
-        const producto = S.productos.find(p => p._id === item._id);
-        if (producto) {
-          let cantidadADevolver = 0;
-          if (item.tipo === 'granel') {
-            cantidadADevolver = item.cantGranel || 0;
-          } else {
-            cantidadADevolver = item.qty || 1;
-          }
-          if (cantidadADevolver > 0) {
-            producto.stock += cantidadADevolver;
-            await guardarDoc('productos', producto._id, { stock: producto.stock });
-          }
-        }
-      }
-    }
-    
-    // 2. Eliminar el fiado de Firestore
-    await borrarDoc('fiados', id);
-    S.fiados = S.fiados.filter(f => f._id !== id);
-    
-    // 3. Actualizar interfaces
-    renderFiados();
-    renderDashboard();
-    renderCierre();
-    updateBadge();
-    
-    mostrarCargando(false);
-    toast(`✅ Fiado de ${fiado.cliente} eliminado - Stock devuelto - No afecta caja (nunca se cobró)`);
-    
-  } catch (error) {
-    mostrarCargando(false);
-    toast('Error: ' + error.message, false);
-  }
-};
-// ══════════════════════════════════════════
-//  ELIMINAR PEDIDO FIADO CON DEVOLUCIÓN DE STOCK
-// ══════════════════════════════════════════
-window.eliminarPedidoFiadoConStock = async function(id) {
-  const pedido = S.pedidos.find(p => p._id === id);
-  if (!pedido) {
-    toast('Pedido no encontrado', false);
-    return;
-  }
-  
-  // Solo se puede eliminar si es un pedido fiado
-  if (pedido.pago !== 'fiado') {
-    toast('Este pedido no es fiado. Usa cancelar pedido normal.', false);
-    return;
-  }
-  
-  // Verificar que no tenga abonos registrados
-  const tieneAbonos = (pedido.abonos && pedido.abonos.length > 0);
-  if (tieneAbonos) {
-    toast('❌ No se puede eliminar: este pedido fiado ya tiene abonos registrados en caja', false);
-    return;
-  }
-  
-  // Verificar que no esté entregado (si está entregado como fiado, no se puede eliminar)
-  if (pedido.estado === 'entregado') {
-    toast('❌ No se puede eliminar: este pedido ya fue entregado', false);
-    return;
-  }
-  
-  const confirmar = confirm(`⚠️ ELIMINAR PEDIDO FIADO\nCliente: ${pedido.cliente}\nTotal: ${fmt(pedido.total)}\nEstado: ${pedido.estado}\n\n¿Eliminar? Los productos volverán al inventario.`);
-  if (!confirmar) return;
-  
-  try {
-    mostrarCargando(true);
-    
-    // 1. Devolver stock de cada producto en el pedido
-    for (const item of pedido.items || []) {
-      const producto = S.productos.find(p => p._id === item._id);
-      if (producto) {
-        let cantidadADevolver = 0;
-        if (item.tipo === 'granel') {
-          cantidadADevolver = item.cantGranel || 0;
-        } else {
-          cantidadADevolver = item.qty || 1;
-        }
-        if (cantidadADevolver > 0) {
-          producto.stock += cantidadADevolver;
-          await guardarDoc('productos', producto._id, { stock: producto.stock });
-        }
-      }
-    }
-    
-    // 2. Eliminar el pedido de Firestore
-    await borrarDoc('pedidos', id);
-    S.pedidos = S.pedidos.filter(p => p._id !== id);
-    
-    // 3. Actualizar interfaces
-    renderPedidos();
-    renderDashboard();
-    updateBadgePedidos();
-    
-    mostrarCargando(false);
-    toast(`✅ Pedido fiado de ${pedido.cliente} eliminado - Stock devuelto - No afecta caja (nunca se cobró)`);
-    
-  } catch (error) {
-    mostrarCargando(false);
-    toast('Error: ' + error.message, false);
-  }
-};
-// ══════════════════════════════════════════
 //  GASTOS
 // ══════════════════════════════════════════
 const TIPOS_GASTO={arriendo:'🏠 Arriendo',servicios:'💡 Servicios',salario:'👤 Salario',compra:'📦 Compra productos',transporte:'🚗 Transporte',varios:'📝 Varios'};
@@ -2256,6 +2095,12 @@ window.renderCajaMayor=renderCajaMayor;
 
 window.abrirCierreMenorModal=function(){
   const fecha=document.getElementById('caja-fecha').value||hoy();
+  // Verificar si ya hay cierre hoy
+  const yaHayCierre=(S.cajaMayor.movimientos||[]).some(m=>m.tipo==='cierre'&&m.fecha===fecha);
+  if(yaHayCierre){
+    toast('⚠ Ya se realizó el cierre del '+fmtF(fecha)+'. Solo se permite un cierre por día.',false);
+    return;
+  }
   const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado');
   const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
   const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
@@ -2309,6 +2154,9 @@ window.confirmarCierreMenor=async function(){
     {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
      tipo:'cierre',desc,monto:pasa,quedaEnMenor:queda}];
   await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
+  // Guardar saldo base para el día siguiente
+  S.saldoBaseCaja = queda;
+  await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:queda,fecha:hoy()},{merge:true});
   cerrarMo('mo-cierre-menor');
   renderDashboard();
   toast('✓ Cierre registrado — '+fmt(pasa)+' pasaron a Caja Mayor · Quedan '+fmt(queda)+' en Caja Menor');
@@ -2316,9 +2164,152 @@ window.confirmarCierreMenor=async function(){
 
 // ══════════════════════════════════════════
 
+// ══════════════════════════════════════════
+//  COTIZACIONES (sin guardar en Firebase)
+// ══════════════════════════════════════════
+let _cotItems = [];
+
+window.abrirModalCotizacion = function() {
+  _cotItems = [];
+  ['cot-cliente','cot-tel','cot-dir','cot-notas'].forEach(id=>document.getElementById(id).value='');
+  // Fecha validez: 15 días
+  const d = new Date(); d.setDate(d.getDate()+15);
+  document.getElementById('cot-validez').value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  document.getElementById('cot-search').value='';
+  document.getElementById('cot-results').style.display='none';
+  renderCotItems();
+  abrirMo('mo-cotizacion');
+};
+
+window.buscarProdCot = function() {
+  const q = document.getElementById('cot-search').value.toLowerCase();
+  const res = document.getElementById('cot-results');
+  if(!q){res.style.display='none';return;}
+  const found = S.productos.filter(p=>p.nombre.toLowerCase().includes(q));
+  if(!found.length){res.innerHTML='<div class="pri" style="color:var(--t3)">Sin resultados</div>';res.style.display='block';return;}
+  res.innerHTML = found.map(p=>`<div class="pri" onclick="agregarProdCot('${p._id}')">
+    <span>${p.nombre}</span>
+    <span style="color:var(--a-d);font-weight:500;font-size:12px">${p.tipo==='granel'?fmt(p.precioUnidad)+'/'+p.unidad:fmt(p.venta)}</span>
+  </div>`).join('');
+  res.style.display='block';
+};
+
+window.agregarProdCot = function(id) {
+  const p = S.productos.find(x=>x._id===id);
+  const ex = _cotItems.find(c=>c._id===id&&c.tipo==='unidad');
+  if(ex) ex.qty++;
+  else _cotItems.push({_id:p._id,nombre:p.nombre,precio:p.tipo==='granel'?p.precioUnidad:p.venta,unidad:p.tipo==='granel'?p.unidad:'',qty:1,tipo:p.tipo||'unidad'});
+  document.getElementById('cot-search').value='';
+  document.getElementById('cot-results').style.display='none';
+  renderCotItems();
+};
+
+function renderCotItems() {
+  const el = document.getElementById('cot-items');
+  const totEl = document.getElementById('cot-total');
+  if(!_cotItems.length){
+    el.innerHTML='<div style="color:var(--t3);font-size:13px;padding:6px 0">Sin productos — busca arriba</div>';
+    totEl.innerHTML='';return;
+  }
+  const total = _cotItems.reduce((a,c)=>a+c.precio*c.qty,0);
+  el.innerHTML = `<div style="background:var(--s2);border-radius:var(--rs);padding:10px">
+    ${_cotItems.map((c,i)=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;gap:8px">
+        <span style="flex:1;font-weight:500">${c.nombre}${c.unidad?' ('+c.unidad+')':''}</span>
+        <div style="display:flex;align-items:center;gap:5px">
+          <div class="qb" onclick="chgQtyCot(${i},-1)">−</div>
+          <input type="number" min="1" value="${c.qty}" onchange="setQtyCot(${i},this.value)" onclick="this.select()" style="width:40px;text-align:center;font-weight:600;font-size:12px;border:1px solid var(--border);border-radius:var(--rs);padding:2px 4px;font-family:inherit">
+          <div class="qb" onclick="chgQtyCot(${i},1)">+</div>
+          <span style="min-width:70px;text-align:right;font-weight:500">${fmt(c.precio*c.qty)}</span>
+          <div class="qb" onclick="quitarCot(${i})" style="color:var(--danger)">×</div>
+        </div>
+      </div>`).join('')}
+  </div>`;
+  totEl.innerHTML=`Total cotización: <span style="color:var(--a-d)">${fmt(total)}</span>`;
+}
+
+window.chgQtyCot=function(i,d){_cotItems[i].qty+=d;if(_cotItems[i].qty<=0)_cotItems.splice(i,1);renderCotItems();};
+window.setQtyCot=function(i,v){let q=parseInt(v)||1;if(q<1)q=1;_cotItems[i].qty=q;renderCotItems();};
+window.quitarCot=function(i){_cotItems.splice(i,1);renderCotItems();};
+
+window.imprimirCotizacion = function() {
+  const cliente = document.getElementById('cot-cliente').value.trim();
+  if(!cliente){toast('Ingresa el nombre del cliente',false);return;}
+  if(!_cotItems.length){toast('Agrega al menos un producto',false);return;}
+  const tel = document.getElementById('cot-tel').value.trim();
+  const dir = document.getElementById('cot-dir').value.trim();
+  const validez = document.getElementById('cot-validez').value;
+  const notas = document.getElementById('cot-notas').value.trim();
+  const total = _cotItems.reduce((a,c)=>a+c.precio*c.qty,0);
+  const nombre = S.config.nombre||'TIENDA DE ASEO';
+  const telNeg = S.config.telefono||'';
+  const dirNeg = S.config.direccion||'';
+  const numCot = 'COT-'+hoy().replace(/-/g,'').slice(2)+'-'+String(Math.floor(Math.random()*900)+100);
+
+  const filas = _cotItems.map(i=>`
+    <tr>
+      <td style="padding:5px 8px;border-bottom:1px solid #eee">${i.nombre}${i.unidad?' ('+i.unidad+')':''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:center">${i.qty}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:right">${fmt(i.precio)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:right;font-weight:600">${fmt(i.precio*i.qty)}</td>
+    </tr>`).join('');
+
+  const htmlCot = `<div style="font-family:Arial,sans-serif;font-size:11px;color:#000;max-width:600px;padding:16px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:12px">
+      <div>
+        <div style="font-size:18px;font-weight:bold">${nombre}</div>
+        ${dirNeg?`<div style="font-size:10px;color:#555">📍 ${dirNeg}</div>`:''}
+        ${telNeg?`<div style="font-size:10px;color:#555">📞 ${telNeg}</div>`:''}
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:16px;font-weight:bold;color:#0F3460">COTIZACIÓN</div>
+        <div style="font-size:11px">${numCot}</div>
+        <div style="font-size:11px">Fecha: ${fmtF(hoy())}</div>
+        ${validez?`<div style="font-size:11px;color:#BA7517">Válida hasta: ${fmtF(validez)}</div>`:''}
+      </div>
+    </div>
+    <div style="background:#F0F4F8;border-radius:6px;padding:10px;margin-bottom:12px">
+      <div style="font-weight:600;font-size:12px;margin-bottom:4px">DATOS DEL CLIENTE</div>
+      <div><b>${cliente}</b></div>
+      ${tel?`<div>📞 ${tel}</div>`:''}
+      ${dir?`<div>📍 ${dir}</div>`:''}
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+      <thead><tr style="background:#0F3460;color:#fff">
+        <th style="padding:6px 8px;text-align:left;font-size:11px">Producto</th>
+        <th style="padding:6px 8px;text-align:center;font-size:11px">Cant.</th>
+        <th style="padding:6px 8px;text-align:right;font-size:11px">P. Unit.</th>
+        <th style="padding:6px 8px;text-align:right;font-size:11px">Subtotal</th>
+      </tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr style="border-top:2px solid #000">
+        <td colspan="3" style="padding:6px 8px;font-weight:bold;font-size:13px">TOTAL</td>
+        <td style="padding:6px 8px;font-weight:bold;font-size:15px;text-align:right;color:#0F3460">${fmt(total)}</td>
+      </tr></tfoot>
+    </table>
+    ${notas?`<div style="background:#FAEEDA;border-radius:6px;padding:8px;margin-bottom:10px;font-size:11px"><b>📝 Observaciones:</b> ${notas}</div>`:''}
+    <div style="border-top:1px dashed #999;padding-top:8px;text-align:center;font-size:10px;color:#666">
+      ${S.config.mensaje||'¡Gracias por su preferencia!'} · Esta cotización no constituye factura de venta.
+    </div>
+  </div>`;
+
+  // Mostrar en modal ticket para imprimir
+  const style = document.getElementById('print-page-style') || document.createElement('style');
+  style.id = 'print-page-style';
+  style.textContent = '@page { size: A4; margin: 15mm; }';
+  document.head.appendChild(style);
+  document.getElementById('ticket-preview').innerHTML = htmlCot;
+  document.getElementById('ticket-print').innerHTML = htmlCot;
+  document.getElementById('ticket-print').style.display = 'block';
+  document.getElementById('pedido-print').style.display = 'none';
+  cerrarMo('mo-cotizacion');
+  abrirMo('mo-ticket');
+  document.querySelector('#mo-ticket .mt2').textContent = '📄 Cotización';
+};
+
 document.addEventListener('click',e=>{
   if(!e.target.closest('.pos-wrap')){
-    ['v-results','ped-results','editar-ped-results','editar-venta-results'].forEach(id=>{
+    ['v-results','ped-results','editar-ped-results','editar-venta-results','cot-results'].forEach(id=>{
       const el=document.getElementById(id);if(el)el.style.display='none';
     });
   }
@@ -2526,6 +2517,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
       <div class="nav-item" id="nav-reporte" data-page="reporte" onclick="goTo('reporte')"><span>📈</span> Reportes</div>
       <div class="nav-item" id="nav-gastos" data-page="gastos" onclick="goTo('gastos')"><span>💸</span> Gastos</div>
       <div class="nav-item" id="nav-proveedores" data-page="proveedores" onclick="goTo('proveedores')"><span>🏭</span> Proveedores</div>
+      <div class="nav-item" id="nav-cotizacion" data-page="cotizacion" onclick="goTo('cotizacion')"><span>📄</span> Cotizaciones</div>
       <div class="nav-item" id="nav-config" data-page="config" onclick="goTo('config')"><span>⚙️</span> Mi negocio</div>
     </nav>
     <div class="sidebar-foot">
@@ -2569,7 +2561,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
       <div class="vl">
         <div class="card">
           <div style="font-weight:600;font-size:13px;margin-bottom:10px">Buscar producto</div>
-          <div class="pos-wrap"><input class="fi" id="v-search" placeholder="Nombre o escanea código de barras..." oninput="buscarProdVenta()" autocomplete="off" id="v-search"><div class="pr" id="v-results" style="display:none"></div></div>
+          <div class="pos-wrap"><input class="fi" id="v-search" placeholder="Nombre o escanea código de barras..." oninput="buscarProdVenta()" autocomplete="off"><div class="pr" id="v-results" style="display:none"></div></div>
           <div class="divider"></div>
           <div style="font-weight:600;font-size:13px;margin-bottom:10px">Carrito</div>
           <div id="carrito"></div>
@@ -2589,15 +2581,13 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <div class="fg mt8"><label class="fl">Teléfono</label><input class="fi" id="f-tel" placeholder="Número"></div>
           </div>
           <div id="cliente-opcional-f" style="margin-top:6px">
-            <details style="cursor:pointer">
-              <summary style="font-size:12px;color:var(--t2);padding:4px 0;list-style:none">
-                <span style="color:var(--t3)">▸ Agregar cliente en factura (opcional)</span>
-              </summary>
-              <div style="padding-top:8px;display:flex;flex-direction:column;gap:8px">
+            <div>
+              <div style="font-size:11px;color:var(--t3);margin-bottom:6px;font-weight:500">Cliente en factura (opcional)</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
                 <div class="fg"><label class="fl">Nombre cliente</label><input class="fi" id="v-cli-nom" placeholder="Nombre del cliente"></div>
                 <div class="fg"><label class="fl">Teléfono</label><input class="fi" id="v-cli-tel" placeholder="300 000 0000"></div>
               </div>
-            </details>
+            </div>
           </div>
           <div style="background:var(--warn-l);border:1px solid #FAC775;border-radius:var(--rs);padding:9px 12px;margin-top:10px;display:flex;align-items:center;gap:10px">
             <span style="font-size:12px;color:var(--warn);font-weight:500">🏷️ Descuento:</span>
@@ -2687,6 +2677,17 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
       <div id="cajaMayor-content"></div>
     </div>
 
+    <div class="page" id="page-cotizacion">
+      <div class="ph">
+        <div><div class="pt">Cotizaciones</div><div class="ps">Genera cotizaciones para tus clientes</div></div>
+        <button class="btn bp" onclick="abrirModalCotizacion()">+ Nueva cotización</button>
+      </div>
+      <div class="card">
+        <div class="tw"><table><thead><tr><th>N°</th><th>Cliente</th><th>Fecha</th><th>Válida hasta</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="cotizaciones-tbody"></tbody></table></div>
+      </div>
+    </div>
+
+    
     <div class="page" id="page-pedidos">
       <div class="ph">
         <div><div class="pt">Pedidos</div><div class="ps" id="pedidos-sub">Toma y gestiona pedidos de clientes</div></div>
@@ -2787,6 +2788,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 
 <div id="ticket-print"></div>
 <div id="pedido-print"></div>
+
 <!-- MODAL PEDIDO -->
 <div class="mo" id="mo-pedido"><div class="md" style="width:500px">
   <div class="mt2" id="mo-pedido-title">Nuevo pedido</div>
@@ -2961,6 +2963,32 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   <div class="ma">
     <button class="btn" onclick="cerrarMo('mo-cierre-menor')">Cancelar</button>
     <button class="btn bp" onclick="confirmarCierreMenor()">✓ Confirmar cierre</button>
+  </div>
+</div></div>
+
+<!-- MODAL COTIZACIÓN -->
+<div class="mo" id="mo-cotizacion"><div class="md" style="width:540px">
+  <div class="mt2">📄 Nueva cotización</div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Cliente / Empresa *</label><input class="fi" id="cot-cliente" placeholder="Nombre del cliente"></div>
+    <div class="fg"><label class="fl">Teléfono (opcional)</label><input class="fi" id="cot-tel" placeholder="300 123 4567"></div>
+  </div>
+  <div class="form-row">
+    <div class="fg"><label class="fl">Dirección / Ciudad</label><input class="fi" id="cot-dir" placeholder="Dirección o ciudad"></div>
+    <div class="fg"><label class="fl">Válida hasta</label><input class="fi" id="cot-validez" type="date"></div>
+  </div>
+  <div class="fg" style="margin-bottom:11px"><label class="fl">Notas (opcional)</label><input class="fi" id="cot-notas" placeholder="Condiciones, observaciones..."></div>
+  <div class="divider"></div>
+  <div style="font-weight:600;font-size:13px;margin-bottom:8px">Productos</div>
+  <div class="pos-wrap" style="margin-bottom:10px">
+    <input class="fi" id="cot-search" placeholder="Buscar producto..." oninput="buscarProdCot()" autocomplete="off">
+    <div class="pr" id="cot-results" style="display:none"></div>
+  </div>
+  <div id="cot-items" style="margin-bottom:10px;min-height:40px"></div>
+  <div id="cot-total" style="font-size:14px;font-weight:600;text-align:right;padding:8px 0;border-top:2px solid var(--border)"></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-cotizacion')">Cancelar</button>
+    <button class="btn bp" onclick="imprimirCotizacion()">🖨 Imprimir / Compartir</button>
   </div>
 </div></div>
 
