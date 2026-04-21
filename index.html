@@ -2110,6 +2110,9 @@ window.abrirCierreMenorModal=function(){
   const cajaFinal=totalCobrado-gastosEf;
   document.getElementById('cierre-menor-resumen').innerHTML=`
     <div style="background:var(--s2);border-radius:var(--rs);padding:12px;font-size:13px">
+      ${(S.saldoBaseCaja||0)>0?`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>💰 Base en caja (día anterior)</span><span class="mono" style="color:var(--navy);font-weight:700">${fmt(S.saldoBaseCaja||0)}</span>
+      </div>`:''}
       <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
         <span>Cobrado hoy (efectivo + transfer.)</span><span class="mono" style="color:var(--info)">${fmt(totalCobrado)}</span>
       </div>
@@ -2124,7 +2127,8 @@ window.abrirCierreMenorModal=function(){
         <span>🏦 Saldo actual caja mayor</span><span class="mono">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</span>
       </div>
     </div>`;
-  window._cierreMenorSaldo=cajaFinal;
+  const saldoRealCaja=(S.saldoBaseCaja||0)+cajaFinal;
+  window._cierreMenorSaldo=saldoRealCaja;
   document.getElementById('cm-monto-queda').value='';
   document.getElementById('cm-transferencia-result').textContent='';
   document.getElementById('cm-desc').value='Cierre '+fmtF(fecha);
@@ -2136,9 +2140,12 @@ window.calcTransferenciaCajaMayor=function(){
   const queda=parseFloat(document.getElementById('cm-monto-queda').value)||0;
   const r=document.getElementById('cm-transferencia-result');
   if(queda<0){r.innerHTML='<span style="color:var(--danger)">⚠ Ingresa un valor positivo</span>';return;}
-  if(queda>saldoCaja){r.innerHTML='<span style="color:var(--danger)">⚠ Supera el saldo disponible ('+fmt(saldoCaja)+')</span>';return;}
-  const pasa=saldoCaja-queda;
-  r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor`;
+  const pasa=Math.max(0,saldoCaja-queda);
+  if(queda>saldoCaja){
+    r.innerHTML=`→ <strong style="color:var(--navy)">$0</strong> pasan a Caja Mayor <span style="color:var(--t3);font-size:12px">(queda más de lo disponible hoy — se acumula para el próximo cierre)</span>`;
+  } else {
+    r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor`;
+  }
 };
 
 window.confirmarCierreMenor=async function(){
