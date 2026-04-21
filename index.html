@@ -1001,11 +1001,12 @@ window.exportarCierre = function() {
 // ══════════════════════════════════════════
 function getLunes(f){const d=new Date(f+'T00:00');const day=d.getDay()||7;d.setDate(d.getDate()-day+1);return d.toISOString().split('T')[0];}
 function getSab(l){const d=new Date(l+'T00:00');d.setDate(d.getDate()+5);return d.toISOString().split('T')[0];}
+function getDom(l){const d=new Date(l+'T00:00');d.setDate(d.getDate()+6);return d.toISOString().split('T')[0];}
 
 function initReporte(){
   const sem=new Map();
-  S.ventas.forEach(v=>{const l=getLunes(v.fecha);if(!sem.has(l))sem.set(l,getSab(l));});
-  const lh=getLunes(hoy());if(!sem.has(lh))sem.set(lh,getSab(lh));
+  S.ventas.forEach(v=>{const l=getLunes(v.fecha);if(!sem.has(l))sem.set(l,getDom(l));});
+  const lh=getLunes(hoy());if(!sem.has(lh))sem.set(lh,getDom(lh));
   const sel=document.getElementById('rep-semana');
   const ord=[...sem.entries()].sort((a,b)=>b[0].localeCompare(a[0]));
   sel.innerHTML=ord.map(([l,s])=>`<option value="${l}">${fmtF(l)} al ${fmtF(s)}</option>`).join('');
@@ -1017,13 +1018,14 @@ window.renderReporte = function() {
   const lunes=document.getElementById('rep-semana').value;
   if(!lunes)return;
   const sab=getSab(lunes);
-  const vS=S.ventas.filter(v=>v.fecha>=lunes&&v.fecha<=sab&&v.pago!=='fiado');
+  const dom=getDom(lunes);
+  const vS=S.ventas.filter(v=>v.fecha>=lunes&&v.fecha<=dom&&v.pago!=='fiado');
   const tot=vS.reduce((a,v)=>a+v.total,0);
   const ef=vS.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
   const tr=vS.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
   const lA=new Date(lunes+'T00:00');lA.setDate(lA.getDate()-7);
   const lAs=lA.toISOString().split('T')[0];
-  const vA=S.ventas.filter(v=>v.fecha>=lAs&&v.fecha<=getSab(lAs)&&v.pago!=='fiado');
+  const vA=S.ventas.filter(v=>v.fecha>=lAs&&v.fecha<=getDom(lAs)&&v.pago!=='fiado');
   const totA=vA.reduce((a,v)=>a+v.total,0);
   const dif=tot-totA;
   const cnt=new Map();
@@ -1045,7 +1047,7 @@ window.renderReporte = function() {
           <div style="font-weight:600;font-size:13px;color:var(--a-d)">${fmt(p.total)}</div></div>`).join(''):'<div style="color:var(--t3);font-size:13px">Sin ventas</div>'}
       </div>
       <div class="card"><div style="font-weight:600;font-size:14px;margin-bottom:12px">📅 Ventas por día</div>
-        ${['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'].map((dia,i)=>{
+        ${['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'].map((dia,i)=>{
           const d=new Date(lunes+'T00:00');d.setDate(d.getDate()+i);
           const ds=d.toISOString().split('T')[0];
           const vd=vS.filter(v=>v.fecha===ds);
