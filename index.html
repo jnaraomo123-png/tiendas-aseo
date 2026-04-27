@@ -264,13 +264,13 @@ function renderDashboard() {
       (v.items||[]).forEach(item=>{
         const prod=S.productos.find(p=>p._id===item._id);
         if(item.tipo==='granel'){
-          // Granel: (precio por kg/lt - compra por kg/lt) * cantidad vendida
-          const precioVentaUnd=item.precio||0;
-          const precioCompraUnd=prod?(prod.compra||0):0;
-          const cant=item.cantGranel||0;
-          u+=(precioVentaUnd-precioCompraUnd)*cant;
+          // item.precio = total vendido (precioUnidad * cantGranel)
+          // costo = precioCompra/unidad * cantGranel
+          const totalVenta=item.precio||0;
+          const costoTotal=(prod?(prod.compra||0):0)*(item.cantGranel||0);
+          u+=totalVenta-costoTotal;
         } else {
-          // Unidad normal: (precio unitario - compra) * cantidad
+          // item.precio = precio unitario
           const pventa=item.precio||0;
           const compra=prod?(prod.compra||0):0;
           const qty=item.qty||1;
