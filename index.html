@@ -263,10 +263,19 @@ function renderDashboard() {
       if(v.pago==='fiado')return;
       (v.items||[]).forEach(item=>{
         const prod=S.productos.find(p=>p._id===item._id);
-        const compra=prod?prod.compra||0:0;
-        const venta=item.precio||0;
-        const qty=item.tipo==='granel'?item.cantGranel||1:item.qty||1;
-        u+=(venta-compra)*qty;
+        if(item.tipo==='granel'){
+          // Granel: (precio por kg/lt - compra por kg/lt) * cantidad vendida
+          const precioVentaUnd=item.precio||0;
+          const precioCompraUnd=prod?(prod.compra||0):0;
+          const cant=item.cantGranel||0;
+          u+=(precioVentaUnd-precioCompraUnd)*cant;
+        } else {
+          // Unidad normal: (precio unitario - compra) * cantidad
+          const pventa=item.precio||0;
+          const compra=prod?(prod.compra||0):0;
+          const qty=item.qty||1;
+          u+=(pventa-compra)*qty;
+        }
       });
     });
     return u;
@@ -809,14 +818,40 @@ function renderFiados() {
       <td class="mono">${fmt(f.total)}</td>
       <td class="mono" style="color:var(--danger)">${fmt(f.saldo!==undefined?f.saldo:f.total)}</td>
       <td><span class="badge ${f.estado==='pendiente'?'by':'bg'}">${f.estado==='pendiente'?'Pendiente':'Cobrado'}</span></td>
-      <td>${f.estado==='pendiente'
-        ?`<button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>`
-        :'<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
+      <td style="display:flex;gap:6px;align-items:center">
+        ${f.estado==='pendiente'
+          ?`<button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>`
+          :'<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
+        <button class="btn bsm" style="background:var(--danger-l);color:var(--danger);border:1px solid var(--danger)" onclick="eliminarFiado('${f._id}')">🗑</button>
       </td>
     </tr>`).join('')
     :'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">No hay fiados</td></tr>';
 }
 window.renderFiados=renderFiados;
+
+window.eliminarFiado=async function(id){
+  const f=S.fiados.find(x=>x._id===id);
+  if(!f)return;
+  const tienePagos=(f.pagos||[]).length>0;
+  const msg=tienePagos
+    ?`¿Eliminar fiado de ${f.cliente}? Tiene abonos registrados. Se devolverá el stock al inventario.`
+    :`¿Eliminar fiado de ${f.cliente} por ${fmt(f.total)}? Se devolverá el stock.`;
+  if(!confirm(msg))return;
+  // Devolver stock
+  for(const item of (f.items||[])){
+    const prod=S.productos.find(p=>p._id===item._id);
+    if(prod){
+      const qty=item.tipo==='granel'?(item.cantGranel||0):(item.qty||1);
+      prod.stock+=qty;
+      await guardarDoc('productos',prod._id,{stock:prod.stock});
+    }
+  }
+  await borrarDoc('fiados',id);
+  S.fiados=S.fiados.filter(x=>x._id!==id);
+  renderFiados();
+  renderDashboard();
+  toast('Fiado eliminado y stock devuelto');
+};
 
 window.abrirCobrar = function(id) {
   S.cobrandoId=id; const f=S.fiados.find(x=>x._id===id);
@@ -1818,21 +1853,24 @@ window.guardarEditarVenta=async function(){
   const totalNew=itemsNew.reduce((a,i)=>a+i.precio*(i.qty||1),0);
 
   // Devolver stock de items quitados o reducidos
+  // Devolver stock de items quitados o reducidos (soporta granel)
   for(const old of itemsOld){
     const nuevo=itemsNew.find(i=>i._id===old._id);
-    const qtyOld=old.qty||1;
-    const qtyNew=nuevo?nuevo.qty||1:0;
+    const esGranel=old.tipo==='granel';
+    const qtyOld=esGranel?(old.cantGranel||0):(old.qty||1);
+    const qtyNew=nuevo?(esGranel?(nuevo.cantGranel||0):(nuevo.qty||1)):0;
     const diff=qtyOld-qtyNew;
     if(diff>0){
       const prod=S.productos.find(x=>x._id===old._id);
       if(prod){prod.stock+=diff;await guardarDoc('productos',prod._id,{stock:prod.stock});}
     }
   }
-  // Descontar stock de items nuevos
+  // Descontar stock de items nuevos o aumentados (soporta granel)
   for(const nw of itemsNew){
     const viejo=itemsOld.find(i=>i._id===nw._id);
-    const qtyNew=nw.qty||1;
-    const qtyOld=viejo?viejo.qty||1:0;
+    const esGranel=nw.tipo==='granel';
+    const qtyNew=esGranel?(nw.cantGranel||0):(nw.qty||1);
+    const qtyOld=viejo?(esGranel?(viejo.cantGranel||0):(viejo.qty||1)):0;
     const diff=qtyNew-qtyOld;
     if(diff>0){
       const prod=S.productos.find(x=>x._id===nw._id);
