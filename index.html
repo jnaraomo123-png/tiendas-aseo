@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -461,6 +462,21 @@ function renderInv() {
 
 window.renderInv = renderInv;
 
+window.exportarInventarioExcel=function(){
+  const rows=[['Nombre','Categoría','Tipo','Código de barras','Stock','Stock mínimo','Precio compra','Precio venta','Precio mayorista','Cant. mínima mayorista','Unidad']];
+  S.productos.forEach(p=>{
+    rows.push([p.nombre||'',p.categoria||'',p.tipo==='granel'?'Granel':'Unidad',p.barcode||p.codigo||'',p.stock||0,p.stockMin||0,p.compra||0,p.tipo==='granel'?(p.precioUnidad||0):(p.venta||0),p.mayorista||0,p.cantMayorista||0,p.unidad||'']);
+  });
+  const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='inventario_'+(S.config.nombre||'tienda').replace(/\s+/g,'_')+'_'+hoy()+'.csv';
+  a.click();URL.revokeObjectURL(url);
+  toast('✓ Inventario exportado — '+S.productos.length+' productos');
+};
+
 window.abrirModalProd = function() {
   S.editProd=null;
   ['p-nom','p-cat','p-compra','p-venta','p-stock','p-min','p-precio-u','p-mayor','p-mayor-min'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -814,11 +830,15 @@ function renderFiados() {
   const cobr=S.fiados.filter(f=>f.estado==='cobrado');
   document.getElementById('fiados-tbody').innerHTML=[...pend,...cobr].length?[...pend,...cobr].map(f=>`
     <tr>
-      <td style="font-weight:500">${f.cliente}</td><td>${f.telefono||'—'}</td><td>${fmtF(f.fecha)}</td>
+      <td style="font-weight:500">${f.cliente}</td>
+      <td>${f.telefono||'—'}</td>
+      <td>${fmtF(f.fecha)}</td>
       <td class="mono">${fmt(f.total)}</td>
-      <td class="mono" style="color:var(--danger)">${fmt(f.saldo!==undefined?f.saldo:f.total)}</td>
+      <td class="mono" style="color:var(--a-d)">${(()=>{const ab=f.total-(f.saldo!==undefined?f.saldo:f.total);return ab>0?fmt(ab):'—';})()}</td>
+      <td class="mono" style="color:var(--danger);font-weight:600">${fmt(f.saldo!==undefined?f.saldo:f.total)}</td>
       <td><span class="badge ${f.estado==='pendiente'?'by':'bg'}">${f.estado==='pendiente'?'Pendiente':'Cobrado'}</span></td>
-      <td style="display:flex;gap:6px;align-items:center">
+      <td style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <button class="btn bsm" style="background:var(--s2);color:var(--navy);border:1px solid var(--border)" onclick="verFacFiado('${f._id}')">📋 Ver</button>
         ${f.estado==='pendiente'
           ?`<button class="btn bsm bp" onclick="abrirAbono('${f._id}','fiado')">💰 Abonar</button>`
           :'<span style="font-size:11px;color:var(--t3)">Pagado</span>'}
@@ -828,6 +848,90 @@ function renderFiados() {
     :'<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:18px">No hay fiados</td></tr>';
 }
 window.renderFiados=renderFiados;
+
+window.verFacFiado=function(id){
+  const f=S.fiados.find(x=>x._id===id);
+  if(!f)return;
+  const abonado=f.total-(f.saldo!==undefined?f.saldo:f.total);
+  const saldo=f.saldo!==undefined?f.saldo:f.total;
+  const pagos=f.pagos||[];
+  const nombre=S.config.nombre||'TIENDA DE ASEO';
+  document.getElementById('fac-fiado-content').innerHTML=`
+    <div style="font-size:13px">
+      <!-- Encabezado -->
+      <div style="background:var(--navy);color:#fff;border-radius:var(--rs);padding:10px 14px;margin-bottom:12px">
+        <div style="font-weight:700;font-size:15px">${nombre}</div>
+        <div style="font-size:11px;opacity:0.85">Fiado · ${fmtF(f.fecha)}</div>
+      </div>
+      <!-- Cliente -->
+      <div style="background:var(--s2);border-radius:var(--rs);padding:10px 14px;margin-bottom:12px">
+        <div style="font-weight:600;color:var(--t2);font-size:11px;margin-bottom:4px">CLIENTE</div>
+        <div style="font-weight:700;font-size:14px">${f.cliente}</div>
+        ${f.telefono?`<div style="font-size:12px;color:var(--t3)">📞 ${f.telefono}</div>`:''}
+      </div>
+      <!-- Productos -->
+      <div style="margin-bottom:12px">
+        <div style="font-weight:600;color:var(--t2);font-size:11px;margin-bottom:6px">PRODUCTOS</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:var(--s2)">
+            <th style="padding:5px 8px;text-align:left;border-radius:4px 0 0 4px">Producto</th>
+            <th style="padding:5px 8px;text-align:center">Cant.</th>
+            <th style="padding:5px 8px;text-align:right">P.Unit</th>
+            <th style="padding:5px 8px;text-align:right;border-radius:0 4px 4px 0">Subtotal</th>
+          </tr></thead>
+          <tbody>
+            ${(f.items||[]).map(i=>`
+              <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:5px 8px">${i.nombre}</td>
+                <td style="padding:5px 8px;text-align:center">${i.tipo==='granel'?(i.cantGranel+' '+i.unidad):(i.qty||1)}</td>
+                <td style="padding:5px 8px;text-align:right">${fmt(i.precio)}</td>
+                <td style="padding:5px 8px;text-align:right;font-weight:600">${fmt(i.tipo==='granel'?i.precio:(i.precio*(i.qty||1)))}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <!-- Totales -->
+      <div style="border-top:2px solid var(--border);padding-top:10px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px">
+          <span>Total fiado</span><span class="mono">${fmt(f.total)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:var(--a-d)">
+          <span>Total abonado</span><span class="mono">${fmt(abonado)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:15px;font-weight:700;color:${saldo>0?'var(--danger)':'var(--a-d)'}">
+          <span>${saldo>0?'Saldo pendiente':'✓ Pagado completo'}</span>
+          <span class="mono">${fmt(saldo)}</span>
+        </div>
+      </div>
+      <!-- Historial de abonos -->
+      ${pagos.length>0?`
+      <div>
+        <div style="font-weight:600;color:var(--t2);font-size:11px;margin-bottom:6px">HISTORIAL DE ABONOS</div>
+        ${pagos.map(p=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 8px;background:var(--s2);border-radius:var(--rs);margin-bottom:4px;font-size:12px">
+            <span>${fmtF(p.fecha||'')} · ${p.pago||'efectivo'}</span>
+            <span class="mono" style="color:var(--a-d);font-weight:600">${fmt(p.monto)}</span>
+          </div>`).join('')}
+      </div>`:'<div style="font-size:12px;color:var(--t3);text-align:center;padding:8px">Sin abonos registrados aún</div>'}
+    </div>`;
+  window._fiadoImprimir=id;
+  abrirMo('mo-fac-fiado');
+};
+
+window.imprimirFacFiado=function(){
+  const content=document.getElementById('fac-fiado-content').innerHTML;
+  const style=document.getElementById('print-page-style')||document.createElement('style');
+  style.id='print-page-style';
+  style.textContent='@page{size:A4;margin:15mm}';
+  document.head.appendChild(style);
+  document.getElementById('ticket-preview').innerHTML=content;
+  document.getElementById('ticket-print').innerHTML=content;
+  document.getElementById('ticket-print').style.display='block';
+  document.getElementById('pedido-print').style.display='none';
+  cerrarMo('mo-fac-fiado');
+  abrirMo('mo-ticket');
+  document.querySelector('#mo-ticket .mt2').textContent='📋 Factura fiado';
+};
 
 window.eliminarFiado=async function(id){
   const f=S.fiados.find(x=>x._id===id);
@@ -1114,6 +1218,19 @@ window.exportarExcel = function() {
 // ══════════════════════════════════════════
 function renderConfig(){
   if(!S.config.vendedores) S.config.vendedores=[];
+  // Poblar selector de años para cierre anual
+  const anioActual=new Date().getFullYear();
+  const aniosConDatos=new Set();
+  S.ventas.forEach(v=>{if(v.fecha)aniosConDatos.add(v.fecha.substring(0,4));});
+  S.gastos.forEach(g=>{if(g.fecha)aniosConDatos.add(g.fecha.substring(0,4));});
+  S.fiados.forEach(f=>{if(f.fecha)aniosConDatos.add(f.fecha.substring(0,4));});
+  const aniosSel=document.getElementById('cfg-anio-archivo');
+  if(aniosSel){
+    const aniosPasados=[...aniosConDatos].filter(a=>parseInt(a)<anioActual).sort().reverse();
+    aniosSel.innerHTML=aniosPasados.length
+      ?aniosPasados.map(a=>`<option value="${a}">${a}</option>`).join('')
+      :`<option value="">Sin años anteriores</option>`;
+  }
   document.getElementById('cfg-nombre-i').value=S.config.nombre||'';
   document.getElementById('cfg-tel-i').value=S.config.telefono||'';
   document.getElementById('cfg-dir-i').value=S.config.direccion||'';
@@ -1127,6 +1244,101 @@ function renderConfig(){
     : '<div style="font-size:12px;color:var(--t3);padding:6px 0">Sin vendedores registrados</div>';
 }
 window.renderConfig=renderConfig;
+
+window.cierreAnualContable=async function(){
+  const anioSel=document.getElementById('cfg-anio-archivo');
+  const anio=anioSel?anioSel.value:'';
+  if(!anio){toast('No hay años anteriores para archivar',false);return;}
+  if(!confirm(`¿Archivar y borrar todos los datos de ${anio}?\n\nEsto incluye ventas, fiados y gastos de ${anio}.\nSe descargará un Excel antes de borrar.\n\nEsta acción NO se puede deshacer.`))return;
+
+  toast('Generando reporte...');
+
+  const ventas=S.ventas.filter(v=>v.fecha&&v.fecha.startsWith(anio));
+  const fiados=S.fiados.filter(f=>f.fecha&&f.fecha.startsWith(anio));
+  const gastos=S.gastos.filter(g=>g.fecha&&g.fecha.startsWith(anio));
+
+  // ── Construir CSV multi-hoja simulado (4 secciones separadas por líneas en blanco) ──
+  const sep=(t)=>`\n"${t}"\n`;
+  const cols=(arr)=>arr.join(',');
+  const row=(arr)=>arr.map(v=>`"${String(v===null||v===undefined?'':v).replace(/"/g,'""')}"`).join(',');
+
+  // SECCIÓN 1: Resumen
+  const totalVentas=ventas.reduce((a,v)=>a+v.total,0);
+  const totalGastos=gastos.reduce((a,g)=>a+g.monto,0);
+  const totalFiados=fiados.reduce((a,f)=>a+f.total,0);
+  const fiadosCobrados=fiados.filter(f=>f.estado==='cobrado').reduce((a,f)=>a+f.total,0);
+  const utilidad=totalVentas-totalGastos;
+
+  let csv='\uFEFF';
+  csv+=sep('RESUMEN ANUAL '+anio+' · '+(S.config.nombre||'Tienda'));
+  csv+=cols(['"Concepto"','"Valor"'])+'\n';
+  csv+=row(['Total ventas cobradas',totalVentas])+'\n';
+  csv+=row(['Total gastos',totalGastos])+'\n';
+  csv+=row(['Utilidad bruta',utilidad])+'\n';
+  csv+=row(['Total fiados generados',totalFiados])+'\n';
+  csv+=row(['Fiados cobrados',fiadosCobrados])+'\n';
+  csv+=row(['Fiados pendientes',totalFiados-fiadosCobrados])+'\n';
+  csv+=row(['Total registros ventas',ventas.length])+'\n';
+  csv+=row(['Total registros gastos',gastos.length])+'\n';
+  csv+=row(['Total fiados',fiados.length])+'\n';
+
+  // SECCIÓN 2: Ventas
+  csv+=sep('VENTAS '+anio);
+  csv+=cols(['"Fecha"','"Hora"','"Factura #"','"Cliente"','"Teléfono"','"Forma de pago"','"Descuento"','"Total"','"Productos"'])+'\n';
+  ventas.forEach(v=>{
+    const prods=(v.items||[]).map(i=>`${i.nombre} x${i.tipo==='granel'?i.cantGranel+(i.unidad||''):i.qty||1}`).join(' | ');
+    csv+=row([v.fecha,v.hora||'',v.numFactura||'',v.cliente||'',v.telefono||'',v.pago,v.descuento||0,v.total,prods])+'\n';
+  });
+
+  // SECCIÓN 3: Gastos
+  csv+=sep('GASTOS '+anio);
+  csv+=cols(['"Fecha"','"Descripción"','"Monto"','"Forma de pago"','"Categoría"'])+'\n';
+  gastos.forEach(g=>{
+    csv+=row([g.fecha,g.desc||g.descripcion||'',g.monto,g.pago||'',g.categoria||''])+'\n';
+  });
+
+  // SECCIÓN 4: Fiados
+  csv+=sep('FIADOS '+anio);
+  csv+=cols(['"Fecha"','"Cliente"','"Teléfono"','"Total"','"Abonado"','"Saldo"','"Estado"','"Productos"'])+'\n';
+  fiados.forEach(f=>{
+    const saldo=f.saldo!==undefined?f.saldo:f.total;
+    const abonado=f.total-saldo;
+    const prods=(f.items||[]).map(i=>`${i.nombre} x${i.tipo==='granel'?i.cantGranel+(i.unidad||''):i.qty||1}`).join(' | ');
+    csv+=row([f.fecha,f.cliente,f.telefono||'',f.total,abonado,saldo,f.estado,prods])+'\n';
+  });
+
+  // Descargar CSV
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='cierre_anual_'+anio+'_'+(S.config.nombre||'tienda').replace(/\s+/g,'_')+'.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+
+  // ── Borrar de Firebase ──
+  toast('Borrando registros de '+anio+' de Firebase...');
+  let borrados=0;
+  for(const v of ventas){
+    await borrarDoc('ventas',v._id);
+    S.ventas=S.ventas.filter(x=>x._id!==v._id);
+    borrados++;
+  }
+  for(const g of gastos){
+    await borrarDoc('gastos',g._id);
+    S.gastos=S.gastos.filter(x=>x._id!==g._id);
+    borrados++;
+  }
+  for(const f of fiados){
+    await borrarDoc('fiados',f._id);
+    S.fiados=S.fiados.filter(x=>x._id!==f._id);
+    borrados++;
+  }
+
+  renderConfig();
+  renderDashboard();
+  toast('✓ Cierre '+anio+' completado — '+borrados+' registros archivados y borrados de Firebase');
+};
 
 window.guardarConfig = async function() {
   S.config.nombre=document.getElementById('cfg-nombre-i').value.trim()||'Mi Tienda';
@@ -1142,6 +1354,19 @@ window.agregarVendedor = async function() {
   const email=document.getElementById('nuevo-vendedor').value.trim().toLowerCase();
   if(!email||!email.includes('@')){toast('Ingresa un correo válido',false);return;}
   if(!S.config.vendedores) S.config.vendedores=[];
+  // Poblar selector de años para cierre anual
+  const anioActual=new Date().getFullYear();
+  const aniosConDatos=new Set();
+  S.ventas.forEach(v=>{if(v.fecha)aniosConDatos.add(v.fecha.substring(0,4));});
+  S.gastos.forEach(g=>{if(g.fecha)aniosConDatos.add(g.fecha.substring(0,4));});
+  S.fiados.forEach(f=>{if(f.fecha)aniosConDatos.add(f.fecha.substring(0,4));});
+  const aniosSel=document.getElementById('cfg-anio-archivo');
+  if(aniosSel){
+    const aniosPasados=[...aniosConDatos].filter(a=>parseInt(a)<anioActual).sort().reverse();
+    aniosSel.innerHTML=aniosPasados.length
+      ?aniosPasados.map(a=>`<option value="${a}">${a}</option>`).join('')
+      :`<option value="">Sin años anteriores</option>`;
+  }
   if(S.config.vendedores.includes(email)){toast('Ese vendedor ya está registrado',false);return;}
   S.config.vendedores.push(email);
   await setDoc(cfgDoc(),{vendedores:S.config.vendedores},{merge:true});
@@ -1971,10 +2196,24 @@ window.guardarGasto=async function(){
 };
 
 window.eliminarGasto=async function(id){
-  if(!confirm('¿Eliminar este gasto?'))return;
+  const g=S.gastos.find(x=>x._id===id);
+  if(!g)return;
+  if(!confirm('¿Eliminar este gasto de '+fmt(g.monto)+'?'))return;
+  // Si era de caja mayor, devolver el monto al saldo
+  if(g.pago==='caja_mayor'||g.pago==='Caja Mayor'){
+    if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+    S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+g.monto;
+    // Registrar devolución en movimientos
+    S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
+      {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+       tipo:'devolucion_gasto',desc:'Gasto eliminado: '+(g.desc||g.descripcion||''),monto:g.monto}];
+    await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
+  }
   await borrarDoc('gastos',id);
-  S.gastos=S.gastos.filter(g=>g._id!==id);
-  renderGastos(); toast('Gasto eliminado');
+  S.gastos=S.gastos.filter(x=>x._id!==id);
+  renderGastos();
+  renderDashboard();
+  toast('✓ Gasto eliminado'+(g.pago==='caja_mayor'||g.pago==='Caja Mayor'?' — '+fmt(g.monto)+' devueltos a Caja Mayor':''));
 };
 
 // ══════════════════════════════════════════
@@ -2584,7 +2823,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </div>
 
     <div class="page" id="page-inventario">
-      <div class="ph"><div><div class="pt">Inventario</div><div class="ps">Productos de tu negocio</div></div><button class="btn bp" id="btn-agregar-prod" onclick="abrirModalProd()">+ Agregar</button></div>
+      <div class="ph"><div><div class="pt">Inventario</div><div class="ps">Productos de tu negocio</div></div><div style="display:flex;gap:8px"><button class="btn" style="background:var(--a-l);color:var(--a-d);border:1px solid var(--a-d);font-weight:600" onclick="exportarInventarioExcel()">📥 Excel</button><button class="btn bp" id="btn-agregar-prod" onclick="abrirModalProd()">+ Agregar</button></div></div>
       <div class="card">
         <div style="display:flex;gap:9px;margin-bottom:13px;flex-wrap:wrap">
           <div class="pos-wrap" style="flex:1;min-width:160px"><input class="fi" id="inv-q" placeholder="🔍 Buscar por nombre o código de barras..." oninput="renderInv()"></div>
@@ -2649,7 +2888,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 
     <div class="page" id="page-fiados">
       <div class="ph"><div><div class="pt">Fiados</div><div class="ps">Ventas pendientes de cobro</div></div></div>
-      <div class="card"><div class="tw"><table><thead><tr><th>Cliente</th><th>Teléfono</th><th>Fecha</th><th>Total</th><th>Saldo</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="fiados-tbody"></tbody></table></div></div>
+      <div class="card"><div class="tw"><table><thead><tr><th>Cliente</th><th>Teléfono</th><th>Fecha</th><th>Total</th><th>Abonado</th><th>Saldo</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="fiados-tbody"></tbody></table></div></div>
     </div>
 
     <div class="page" id="page-caja">
@@ -2712,6 +2951,24 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <button class="btn bp" onclick="agregarVendedor()">+ Agregar</button>
           </div>
           <div style="font-size:11px;color:var(--t3);margin-top:6px">El correo debe estar registrado en Firebase Authentication</div>
+        </div>
+      </div>
+
+      <!-- SECCIÓN CIERRE ANUAL -->
+      <div class="card" style="max-width:860px;margin-top:16px;border:2px solid var(--danger-l)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:var(--danger);margin-bottom:4px">📦 Cierre anual contable</div>
+            <div style="font-size:13px;color:var(--t2);margin-bottom:8px">Descarga el reporte completo del año para la contadora y libera espacio en Firebase.</div>
+            <div style="font-size:12px;color:var(--t3)">⚠ Esta acción es irreversible — los datos se borran de Firebase después de descargar el Excel.</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;min-width:180px">
+            <select class="fi" id="cfg-anio-archivo" style="font-weight:600">
+            </select>
+            <button class="btn" style="background:var(--danger);color:#fff;font-weight:700;padding:10px 16px" onclick="cierreAnualContable()">
+              📥 Descargar y archivar
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -3036,6 +3293,16 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   <div class="ma">
     <button class="btn" onclick="cerrarMo('mo-cotizacion')">Cancelar</button>
     <button class="btn bp" onclick="imprimirCotizacion()">🖨 Imprimir / Compartir</button>
+  </div>
+</div></div>
+
+<!-- MODAL FACTURA FIADO -->
+<div class="mo" id="mo-fac-fiado"><div class="md" style="width:480px">
+  <div class="mt2">📋 Factura del fiado</div>
+  <div id="fac-fiado-content" style="margin-bottom:14px"></div>
+  <div class="ma">
+    <button class="btn" onclick="cerrarMo('mo-fac-fiado')">Cerrar</button>
+    <button class="btn bp" onclick="imprimirFacFiado()">🖨 Imprimir</button>
   </div>
 </div></div>
 
