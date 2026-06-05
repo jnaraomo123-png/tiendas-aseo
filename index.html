@@ -1837,12 +1837,13 @@ window.guardarGasto=async function(){
   }
   cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
 };
+
 window.eliminarGasto = async function(id) {
   const gasto = S.gastos.find(g => g._id === id);
   if (!gasto) return;
   if (!confirm('¿Eliminar este gasto?')) return;
 
-  // NUEVO: Revertir Caja Mayor
+  // Si el gasto se pagó con Caja Mayor, restaurar el saldo
   if (gasto.pago === 'caja_mayor') {
     if (!S.cajaMayor) S.cajaMayor = { saldo: 0, movimientos: [] };
     S.cajaMayor.saldo = (S.cajaMayor.saldo || 0) + gasto.monto;
@@ -1850,12 +1851,14 @@ window.eliminarGasto = async function(id) {
       fecha: hoy(),
       hora: new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
       tipo: 'reversion_gasto',
-      desc: `Reversión: ${gasto.descripcion || TIPOS_GASTO[gasto.tipo] || gasto.tipo}`,
+      desc: `Reversión de gasto: ${gasto.descripcion || TIPOS_GASTO[gasto.tipo] || gasto.tipo}`,
       monto: gasto.monto
     });
     await setDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'), S.cajaMayor, { merge: true });
+    toast(`Se devolvieron ${fmt(gasto.monto)} a Caja Mayor`);
   }
 
+  // Eliminar el gasto de Firestore y de la lista local
   await borrarDoc('gastos', id);
   S.gastos = S.gastos.filter(g => g._id !== id);
   renderGastos();
