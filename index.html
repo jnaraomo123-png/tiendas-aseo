@@ -1837,11 +1837,29 @@ window.guardarGasto=async function(){
   }
   cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
 };
-window.eliminarGasto = async function(id){
-  if(!confirm('¿Eliminar este gasto?'))return;
-  await borrarDoc('gastos',id);
-  S.gastos=S.gastos.filter(g=>g._id!==id);
-  renderGastos(); toast('Gasto eliminado');
+window.eliminarGasto = async function(id) {
+  const gasto = S.gastos.find(g => g._id === id);
+  if (!gasto) return;
+  if (!confirm('¿Eliminar este gasto?')) return;
+
+  // NUEVO: Revertir Caja Mayor
+  if (gasto.pago === 'caja_mayor') {
+    if (!S.cajaMayor) S.cajaMayor = { saldo: 0, movimientos: [] };
+    S.cajaMayor.saldo = (S.cajaMayor.saldo || 0) + gasto.monto;
+    S.cajaMayor.movimientos.push({
+      fecha: hoy(),
+      hora: new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
+      tipo: 'reversion_gasto',
+      desc: `Reversión: ${gasto.descripcion || TIPOS_GASTO[gasto.tipo] || gasto.tipo}`,
+      monto: gasto.monto
+    });
+    await setDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'), S.cajaMayor, { merge: true });
+  }
+
+  await borrarDoc('gastos', id);
+  S.gastos = S.gastos.filter(g => g._id !== id);
+  renderGastos();
+  toast('Gasto eliminado');
 };
 // ══════════════════════════════════════════
 //  PROVEEDORES
