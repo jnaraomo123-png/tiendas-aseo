@@ -895,7 +895,7 @@ function renderCierre(){
       </tbody></table></div>
     </div>`:''}
     <div class="card mt14"><div style="font-weight:600;font-size:14px;margin-bottom:11px">Detalle de ventas</div>
-      ${vd.length?`<div class="tw"><table><thead><tr><th>Hora</th><th>Detalle</th><th>Pago</th><th>Monto</th><th></th></tr></thead><tbody>
+      ${vd.length?`<div class="tw"><td><thead><tr><th>Hora</th><th>Detalle</th><th>Pago</th><th>Monto</th><th></th></tr></thead><tbody>
         ${vd.map(v=>`<tr><td class="mono" style="font-size:12px">${v.hora||'—'}</td>
         <td style="font-size:12px;color:var(--t2)">${v.esAbono?'Abono: '+v.cliente:v.esPedido?'Pedido: '+v.cliente:v.items.map(i=>i.nombre+(i.qty>1?' ×'+i.qty:'')).join(', ')}</td>
         <td><span class="badge ${v.pago==='efectivo'?'bb':'bpu'}">${v.pago}</span>${v.esAbono?'<span class="badge by" style="margin-left:4px">abono</span>':''}</td>
@@ -1118,14 +1118,14 @@ function renderPedidos(){
       resDiv.innerHTML=`
         <div class="card" style="margin-top:14px">
           <div style="font-weight:600;font-size:14px;margin-bottom:12px">📊 Resumen por vendedor</div>
-          <div class="tw"><table><thead><tr><th>Vendedor</th><th>Total pedidos</th><th>Entregados</th><th>Pendientes</th><th>Total cobrado</th></tr></thead><tbody>
+          <div class="tw"><tr><thead><tr><th>Vendedor</th><th>Total pedidos</th><th>Entregados</th><th>Pendientes</th><th>Total cobrado</th></tr></thead><tbody>
             ${[...vendMap.values()].sort((a,b)=>b.total-a.total).map(v=>`
               <tr>
                 <td style="font-weight:500">${v.nombre}</td>
                 <td class="mono">${v.count}</td>
                 <td><span class="badge bg">${v.entregado}</span></td>
                 <td><span class="badge by">${v.pendiente}</span></td>
-                <td class="mono" style="font-weight:600;color:var(--info)">${fmt(v.total)}</td>
+                <td class="mono" style="font-weight:600;color:var(--info)">${fmt(v.total)}</span></td>
               </tr>`).join('')}
           </tbody></table></div>
         </div>`;
@@ -1414,7 +1414,7 @@ window.imprimirPedido=function(id){
       <td style="padding:4px 6px;border-bottom:1px solid #eee">${i.nombre}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:center">${i.qty||1}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${fmt(i.precio)}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right;font-weight:600">${fmt(i.precio*(i.qty||1))}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right;font-weight:600">${fmt(i.precio*(i.qty||1))}</span></td>
     </tr>`).join('');
 
   const html=`
@@ -1838,32 +1838,13 @@ window.guardarGasto=async function(){
   cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
 };
 
-window.eliminarGasto = async function(id) {
-  const gasto = S.gastos.find(g => g._id === id);
-  if (!gasto) return;
-  if (!confirm('¿Eliminar este gasto?')) return;
-
-  // Si el gasto se pagó con Caja Mayor, restaurar el saldo
-  if (gasto.pago === 'caja_mayor') {
-    if (!S.cajaMayor) S.cajaMayor = { saldo: 0, movimientos: [] };
-    S.cajaMayor.saldo = (S.cajaMayor.saldo || 0) + gasto.monto;
-    S.cajaMayor.movimientos.push({
-      fecha: hoy(),
-      hora: new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
-      tipo: 'reversion_gasto',
-      desc: `Reversión de gasto: ${gasto.descripcion || TIPOS_GASTO[gasto.tipo] || gasto.tipo}`,
-      monto: gasto.monto
-    });
-    await setDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'), S.cajaMayor, { merge: true });
-    toast(`Se devolvieron ${fmt(gasto.monto)} a Caja Mayor`);
-  }
-
-  // Eliminar el gasto de Firestore y de la lista local
-  await borrarDoc('gastos', id);
-  S.gastos = S.gastos.filter(g => g._id !== id);
-  renderGastos();
-  toast('Gasto eliminado');
+window.eliminarGasto=async function(id){
+  if(!confirm('¿Eliminar este gasto?'))return;
+  await borrarDoc('gastos',id);
+  S.gastos=S.gastos.filter(g=>g._id!==id);
+  renderGastos(); toast('Gasto eliminado');
 };
+
 // ══════════════════════════════════════════
 //  PROVEEDORES
 // ══════════════════════════════════════════
@@ -2005,7 +1986,7 @@ function renderCajaMayor(){
     ${mov.length?`
     <div class="card">
       <div style="font-weight:600;font-size:14px;margin-bottom:12px">📋 Historial de movimientos</div>
-      <div class="tw"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripción</th><th>Monto</th></tr></thead><tbody>
+      <div class="tw"><tr><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripción</th><th>Monto</th></tr></thead><tbody>
         ${mov.map(m=>`<tr>
           <td style="font-size:12px">${fmtF(m.fecha)}</td>
           <td style="font-size:12px;color:var(--t3)">${m.hora||'—'}</td>
@@ -2468,7 +2449,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
             <button class="btn bsm" id="fil-cancelado" onclick="filtrarPedidos('cancelado')">Cancelados</button>
           </div>
         </div>
-        <div class="tw"><table><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
+        <div class="tw"><tr><thead><tr><th>Cliente / Tienda</th><th>Dirección</th><th>Vendedor</th><th>Fecha</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="pedidos-tbody"></tbody></table></div>
       </div>
       <div id="pedidos-vendedor-resumen"></div>
     </div>
