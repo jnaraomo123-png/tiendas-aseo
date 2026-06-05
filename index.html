@@ -1837,41 +1837,11 @@ window.guardarGasto=async function(){
   }
   cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
 };
-
-window.eliminarGasto = async function(id) {
-  const gasto = S.gastos.find(g => g._id === id);
-  if (!gasto) return;
-  if (!confirm('¿Eliminar este gasto?')) return;
-
-  // 🔁 REVERTIR CAJA MAYOR si el gasto se pagó desde allí
-  if (gasto.pago === 'caja_mayor') {
-    if (!S.cajaMayor) S.cajaMayor = { saldo: 0, movimientos: [] };
-    // Devolver el dinero al saldo
-    S.cajaMayor.saldo = (S.cajaMayor.saldo || 0) + gasto.monto;
-    // Registrar movimiento inverso (para que quede trazabilidad)
-    S.cajaMayor.movimientos.push({
-      fecha: hoy(),
-      hora: new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
-      tipo: 'reversion_gasto',
-      desc: `Reversión de gasto: ${gasto.descripcion || TIPOS_GASTO[gasto.tipo] || gasto.tipo}`,
-      monto: gasto.monto
-    });
-    // Guardar en Firebase
-    await setDoc(doc(db, 'negocios', uidActivo(), 'config', 'cajaMayor'), S.cajaMayor, { merge: true });
-    toast(`💰 Se devolvieron ${fmt(gasto.monto)} a Caja Mayor`);
-  }
-
-  // Eliminar el gasto de Firestore y de la lista local
-  await borrarDoc('gastos', id);
-  S.gastos = S.gastos.filter(g => g._id !== id);
-  renderGastos();
-  
-  // Refrescar la vista de Caja Mayor si está visible
-  if (document.getElementById('page-cajaMayor').classList.contains('active')) {
-    renderCajaMayor();
-  }
-  
-  toast('Gasto eliminado correctamente');
+window.eliminarGasto = async function(id){
+  if(!confirm('¿Eliminar este gasto?'))return;
+  await borrarDoc('gastos',id);
+  S.gastos=S.gastos.filter(g=>g._id!==id);
+  renderGastos(); toast('Gasto eliminado');
 };
 // ══════════════════════════════════════════
 //  PROVEEDORES
