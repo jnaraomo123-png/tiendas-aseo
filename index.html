@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -115,6 +114,7 @@ async function cargarDatos() {
     aplicarRol();
   } catch(e) { toast('Error cargando datos: '+e.message, false); }
   mostrarCargando(false);
+
 }
 
 function aplicarRol() {
@@ -223,6 +223,15 @@ function hoy()  {
 }
 function fmt(n) { return '$'+Number(n||0).toLocaleString('es-CO'); }
 function fmtF(s){ return new Date(s+'T00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}); }
+window.fmt = fmt;
+window.fmtF = fmtF;
+window.hoy = hoy;
+window.uidActivo = uidActivo;
+window._db = db;
+window._doc = doc;
+window._getDoc = getDoc;
+window._getDocs = getDocs;
+window._collection = collection;
 function toast(msg, ok=true) {
   const t=document.getElementById('toast');
   t.textContent=(ok?'✓ ':'⚠ ')+msg; t.style.display='block';
@@ -1046,7 +1055,7 @@ window.imprimirVentaHistorial=(id)=>{const v=S.ventas.find(x=>x._id===id);if(v)m
 // ══════════════════════════════════════════
 function renderCierre(){
   const fecha=document.getElementById('caja-fecha').value||hoy();
-  const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado');
+  const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado').sort((a,b)=>(a.hora||'00:00').localeCompare(b.hora||'00:00'));
   const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
   const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
   const abonosEf=vd.filter(v=>v.esAbono&&v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
@@ -1211,6 +1220,107 @@ window.exportarExcel = function() {
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
   a.download=`reporte_${lunes}.csv`;a.click();toast('Excel exportado');
+};
+
+window.initGananciaMes = function() {
+  const mesesSet = new Set();
+  S.ventas.forEach(v=>{ if(v.fecha) mesesSet.add(v.fecha.substring(0,7)); });
+  const meses = [...mesesSet].sort((a,b)=>b>a?1:-1);
+  const sel = document.getElementById('rep-mes-sel');
+  if(!sel) return;
+  const nomMes = m => {
+    const [a,ms] = m.split('-');
+    const n = new Date(parseInt(a),parseInt(ms)-1,1).toLocaleDateString('es-CO',{month:'long',year:'numeric'});
+    return n.charAt(0).toUpperCase()+n.slice(1);
+  };
+  sel.innerHTML = meses.map(m=>`<option value="${m}">${nomMes(m)}</option>`).join('');
+  window.mostrarGananciaMes();
+};
+
+window.mostrarGananciaMes = function() {
+  const sel = document.getElementById('rep-mes-sel');
+  const cont = document.getElementById('reporte-mes-content');
+  if(!sel||!cont) return;
+  const mes = sel.value;
+  if(!mes) { cont.innerHTML='<p style="padding:16px;color:var(--t3)">Selecciona un mes.</p>'; return; }
+
+  const [a,ms] = mes.split('-');
+  const nomMes = new Date(parseInt(a),parseInt(ms)-1,1).toLocaleDateString('es-CO',{month:'long',year:'numeric'});
+
+  const vMes = S.ventas.filter(v=>v.fecha&&v.fecha.startsWith(mes)&&v.pago!=='fiado');
+  const totalVentas = vMes.reduce((s,v)=>s+(v.total||0),0);
+
+  let gananciaTotal = 0;
+  vMes.forEach(v=>{
+    (v.items||[]).forEach(item=>{
+      const prod = S.productos.find(p=>p._id===item._id);
+      const compra = prod?(prod.compra||0):0;
+      if(item.tipo==='granel'){
+        gananciaTotal += (item.precio||0) - compra*(item.cantGranel||0);
+      } else {
+        gananciaTotal += ((item.precio||0)-compra)*(item.qty||1);
+      }
+    });
+  });
+
+  // Agrupar por dia
+  const porDia = {};
+  vMes.forEach(v=>{
+    if(!porDia[v.fecha]) porDia[v.fecha]={ventas:0,ganancia:0,num:0};
+    porDia[v.fecha].ventas += (v.total||0);
+    porDia[v.fecha].num++;
+    (v.items||[]).forEach(item=>{
+      const prod = S.productos.find(p=>p._id===item._id);
+      const compra = prod?(prod.compra||0):0;
+      if(item.tipo==='granel'){
+        porDia[v.fecha].ganancia += (item.precio||0)-compra*(item.cantGranel||0);
+      } else {
+        porDia[v.fecha].ganancia += ((item.precio||0)-compra)*(item.qty||1);
+      }
+    });
+  });
+
+  const diasArr = Object.keys(porDia).sort();
+  const clsG = gananciaTotal>=0?'var(--info)':'var(--danger)';
+
+  const diasHTML = diasArr.length ? diasArr.map(ds=>{
+    const d = porDia[ds];
+    return `<tr>
+      <td style="font-size:13px">${fmtF(ds)}</td>
+      <td class="mono" style="font-size:13px">${fmt(d.ventas)}</td>
+      <td class="mono" style="font-size:13px;color:${d.ganancia>=0?'var(--info)':'var(--danger)'};font-weight:600">${d.ganancia>=0?'+':''}${fmt(d.ganancia)}</td>
+      <td style="font-size:12px;color:var(--t3)">${d.num} ventas</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="4" style="text-align:center;color:var(--t3);padding:16px">Sin ventas este mes</td></tr>`;
+
+  cont.innerHTML = `
+    <div style="padding:0 16px">
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="sc" style="border:2px solid var(--accent)">
+          <div class="sc-label">Ventas ${nomMes.charAt(0).toUpperCase()+nomMes.slice(1)}</div>
+          <div class="sc-val g" style="font-size:22px">${fmt(totalVentas)}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:3px">${vMes.length} ventas cobradas</div>
+        </div>
+        <div class="sc" style="border:2px solid ${clsG}">
+          <div class="sc-label">Ganancia total del mes</div>
+          <div class="sc-val" style="font-size:22px;color:${clsG}">${gananciaTotal>=0?'+':''}${fmt(gananciaTotal)}</div>
+          <div style="font-size:10px;color:var(--t3);margin-top:3px">precio venta &minus; costo</div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-weight:600;font-size:14px;margin-bottom:12px">Ganancia por dia</div>
+        <div class="tw"><table>
+          <thead><tr><th>Fecha</th><th>Ventas</th><th>Ganancia</th><th>Detalle</th></tr></thead>
+          <tbody>${diasHTML}</tbody>
+          <tfoot><tr style="background:var(--s2)">
+            <td style="font-weight:700;font-size:13px">TOTAL</td>
+            <td class="mono" style="font-weight:700;font-size:13px">${fmt(totalVentas)}</td>
+            <td class="mono" style="font-weight:700;font-size:13px;color:${clsG}">${gananciaTotal>=0?'+':''}${fmt(gananciaTotal)}</td>
+            <td></td>
+          </tr></tfoot>
+        </table></div>
+      </div>
+    </div>`;
 };
 
 // ══════════════════════════════════════════
@@ -2340,36 +2450,59 @@ window.confirmarPagoProveedor=async function(){
 // ══════════════════════════════════════════
 function renderCajaMayor(){
   if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
-  const mov=[...(S.cajaMayor.movimientos||[])].reverse().slice(0,60);
   const saldo=S.cajaMayor.saldo||0;
-  const totalEntradas=(S.cajaMayor.movimientos||[]).filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
-  const totalSalidas=Math.abs((S.cajaMayor.movimientos||[]).filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
+  const todosMovs=S.cajaMayor.movimientos||[];
+  const totalEntradas=todosMovs.filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
+  const totalSalidas=Math.abs(todosMovs.filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
+  const mesesSet=new Set();
+  todosMovs.forEach(m=>{ if(m.fecha) mesesSet.add(m.fecha.substring(0,7)); });
+  const mesActual=hoy().substring(0,7);
+  mesesSet.add(mesActual);
+  const mesesOrd=[...mesesSet].sort((a,b)=>b.localeCompare(a));
+  const selEl=document.getElementById('cajaMayor-mes-sel');
+  const mesFiltro=selEl?selEl.value:mesActual;
+  const movFiltrados=mesFiltro?todosMovs.filter(m=>m.fecha&&m.fecha.startsWith(mesFiltro)):todosMovs;
+  const movMostrar=[...movFiltrados].reverse();
+  const entradasMes=movFiltrados.filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
+  const salidasMes=Math.abs(movFiltrados.filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
+  const nombreMes=(mes)=>{if(!mes)return'';const[a,ms]=mes.split('-');const n=new Date(parseInt(a),parseInt(ms)-1,1).toLocaleDateString('es-CO',{month:'long',year:'numeric'});return n.charAt(0).toUpperCase()+n.slice(1);};
   document.getElementById('cajaMayor-content').innerHTML=`
     <div class="stats-grid" style="margin-bottom:16px">
       <div class="sc" style="border:2px solid var(--accent)">
         <div class="sc-label">Saldo actual</div>
         <div class="sc-val g" style="font-size:28px">${fmt(saldo)}</div>
-        <div style="font-size:10px;color:var(--t3);margin-top:3px">${(S.cajaMayor.movimientos||[]).length} movimientos</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:3px">${todosMovs.length} movimientos total</div>
       </div>
-      <div class="sc"><div class="sc-label">Total entradas</div><div class="sc-val b">${fmt(totalEntradas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">cierres caja menor</div></div>
-      <div class="sc"><div class="sc-label">Total salidas</div><div class="sc-val o">${fmt(totalSalidas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">gastos de caja mayor</div></div>
+      <div class="sc"><div class="sc-label">Total entradas</div><div class="sc-val b">${fmt(totalEntradas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">todos los cierres</div></div>
+      <div class="sc"><div class="sc-label">Total salidas</div><div class="sc-val o">${fmt(totalSalidas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">todos los gastos</div></div>
     </div>
-    ${mov.length?`
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:14px">Filtrar por mes:</span>
+        <select class="fi" id="cajaMayor-mes-sel" onchange="renderCajaMayor()" style="width:210px">
+          <option value="">Todos los meses</option>
+          ${mesesOrd.map(m=>`<option value="${m}" ${m===mesFiltro?'selected':''}>${nombreMes(m)}</option>`).join('')}
+        </select>
+        ${mesFiltro?`<span style="font-size:12px;color:var(--t3)">${movFiltrados.length} movimientos - Entradas: <strong style="color:var(--info)">${fmt(entradasMes)}</strong> - Salidas: <strong style="color:var(--danger)">${fmt(salidasMes)}</strong></span>`:''}
+      </div>
+    </div>
+    ${movMostrar.length?`
     <div class="card">
-      <div style="font-weight:600;font-size:14px;margin-bottom:12px">📋 Historial de movimientos</div>
-      <div class="tw"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripción</th><th>Monto</th></tr></thead><tbody>
-        ${mov.map(m=>`<tr>
+      <div style="font-weight:600;font-size:14px;margin-bottom:12px">Movimientos${mesFiltro?' - '+nombreMes(mesFiltro):''}</div>
+      <div class="tw"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripcion</th><th>Monto</th></tr></thead><tbody>
+        ${movMostrar.map(m=>`<tr>
           <td style="font-size:12px">${fmtF(m.fecha)}</td>
-          <td style="font-size:12px;color:var(--t3)">${m.hora||'—'}</td>
-          <td><span class="badge ${m.tipo==='cierre'?'bg':'br'}">${m.tipo==='cierre'?'🏦 Cierre':'💸 Gasto'}</span></td>
-          <td style="font-size:12px;color:var(--t2)">${m.desc||'—'}${m.quedaEnMenor!==undefined?'<div style="font-size:10px;color:var(--t3)">Quedó en menor: '+fmt(m.quedaEnMenor)+'</div>':''}</td>
+          <td style="font-size:12px;color:var(--t3)">${m.hora||'-'}</td>
+          <td><span class="badge ${m.tipo==='cierre'?'bg':'br'}">${m.tipo==='cierre'?'Cierre':'Gasto'}</span></td>
+          <td style="font-size:12px;color:var(--t2)">${m.desc||'-'}${m.quedaEnMenor!==undefined?'<div style="font-size:10px;color:var(--t3)">Quedo en menor: '+fmt(m.quedaEnMenor)+'</div>':''}</td>
           <td class="mono" style="font-weight:600;color:${m.monto>=0?'var(--info)':'var(--danger)'}">
             ${m.monto>=0?'+':''}${fmt(m.monto)}
           </td>
         </tr>`).join('')}
       </tbody></table></div>
-    </div>`:'<div class="card" style="text-align:center;padding:28px;color:var(--t3)">Sin movimientos aún — haz el primer cierre de caja menor.</div>'}`;
+    </div>`:'<div class="card" style="text-align:center;padding:28px;color:var(--t3)">Sin movimientos para este mes.</div>'}`;
 }
+
 window.renderCajaMayor=renderCajaMayor;
 
 window.abrirCierreMenorModal=function(){
@@ -2443,6 +2576,34 @@ window.confirmarCierreMenor=async function(){
   // Guardar saldo base para el día siguiente
   S.saldoBaseCaja = queda;
   await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:queda,fecha:hoy()},{merge:true});
+  // Calcular y guardar ganancia del dia en Firebase
+  try {
+    const fechaHoy = hoy();
+    const mesKey = fechaHoy.substring(0,7);
+    const ventasHoy = S.ventas.filter(v=>v.fecha===fechaHoy&&v.pago!=='fiado');
+    let gananciaDia = 0;
+    let ventasBrutaDia = ventasHoy.reduce((a,v)=>a+(v.total||0),0);
+    ventasHoy.forEach(v=>{
+      (v.items||[]).forEach(item=>{
+        const prod = S.productos.find(p=>p._id===item._id);
+        const compra = prod?(prod.compra||0):0;
+        if(item.tipo==='granel'){
+          gananciaDia += (item.precio||0) - compra*(item.cantGranel||0);
+        } else {
+          gananciaDia += ((item.precio||0)-compra)*(item.qty||1);
+        }
+      });
+    });
+    // Leer ganancia acumulada del mes
+    const ganMesRef = doc(db,'negocios',uidActivo(),'config','ganancia_'+mesKey);
+    const ganMesSnap = await getDoc(ganMesRef);
+    const ganMesActual = ganMesSnap.exists() ? ganMesSnap.data() : {mes:mesKey,ganancia:0,ventas:0,dias:{}};
+    ganMesActual.ganancia = (ganMesActual.ganancia||0) + gananciaDia;
+    ganMesActual.ventas   = (ganMesActual.ventas||0)   + ventasBrutaDia;
+    ganMesActual.dias     = ganMesActual.dias||{};
+    ganMesActual.dias[fechaHoy] = {ganancia:gananciaDia, ventas:ventasBrutaDia, numVentas:ventasHoy.length};
+    await setDoc(ganMesRef, ganMesActual, {merge:true});
+  } catch(e){ console.log('Error guardando ganancia:', e); }
   cerrarMo('mo-cierre-menor');
   renderDashboard();
   toast('✓ Cierre registrado — '+fmt(pasa)+' pasaron a Caja Mayor · Quedan '+fmt(queda)+' en Caja Menor');
@@ -2903,10 +3064,19 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </div>
 
     <div class="page" id="page-reporte">
-      <div class="ph"><div><div class="pt">Reportes semanales</div><div class="ps">Corte los sábados</div></div>
-        <div style="display:flex;gap:8px;align-items:center"><select class="fi" id="rep-semana" onchange="renderReporte()" style="width:220px"></select><button class="btn bp" onclick="exportarExcel()">⬇ Excel</button></div>
+      <div class="ph"><div><div class="pt">Reportes</div><div class="ps">Semanas y ganancias por mes</div></div></div>
+      <div style="display:flex;gap:8px;margin:0 16px 12px;border-bottom:2px solid var(--border)">
+        <button id="tab-semana-btn" onclick="switchRepTab('semana')" style="padding:8px 18px;border:none;background:none;font-weight:600;font-size:13px;color:var(--accent);border-bottom:2px solid var(--accent);margin-bottom:-2px;cursor:pointer">Semanas</button>
+        <button id="tab-mes-btn" onclick="switchRepTab('mes')" style="padding:8px 18px;border:none;background:none;font-weight:600;font-size:13px;color:var(--t3);border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer">Ganancia por mes</button>
       </div>
-      <div id="reporte-content"></div>
+      <div id="tab-semana">
+        <div style="display:flex;gap:8px;align-items:center;padding:0 16px 12px"><select class="fi" id="rep-semana" onchange="renderReporte()" style="width:220px"></select><button class="btn bp" onclick="exportarExcel()">&#x2B07; Excel</button></div>
+        <div id="reporte-content"></div>
+      </div>
+      <div id="tab-mes" style="display:none">
+        <div style="padding:0 16px 12px"><select class="fi" id="rep-mes-sel" onchange="window.mostrarGananciaMes()" style="width:210px"></select></div>
+        <div id="reporte-mes-content"></div>
+      </div>
     </div>
 
     <!-- GASTOS -->
@@ -3325,6 +3495,21 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 </div></div>
 
 <div id="toast" style="position:fixed;bottom:22px;right:22px;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;display:none;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.2)"></div>
+
+
+<script>
+window.switchRepTab = function(tab) {
+  var ts = document.getElementById('tab-semana');
+  var tm = document.getElementById('tab-mes');
+  var bs = document.getElementById('tab-semana-btn');
+  var bm = document.getElementById('tab-mes-btn');
+  if(ts) ts.style.display = tab==='semana' ? 'block' : 'none';
+  if(tm) tm.style.display = tab==='mes' ? 'block' : 'none';
+  if(bs) { bs.style.color = tab==='semana' ? 'var(--accent)' : 'var(--t3)'; bs.style.borderBottomColor = tab==='semana' ? 'var(--accent)' : 'transparent'; }
+  if(bm) { bm.style.color = tab==='mes' ? 'var(--accent)' : 'var(--t3)'; bm.style.borderBottomColor = tab==='mes' ? 'var(--accent)' : 'transparent'; }
+  if(tab === 'mes' && window.initGananciaMes) window.initGananciaMes();
+};
+</script>
 
 </body>
 </html>
