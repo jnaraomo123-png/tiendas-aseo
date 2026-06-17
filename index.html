@@ -69,7 +69,7 @@ let S = {
   editProd:null, cobrandoId:null, granelProdId:null, granelMode:'valor',
   _ventaPendiente:null, rol:'dueno',
   gastos:[], proveedores:[],
-  cajaMayor:{saldo:0, movimientos:[]},
+  cajaMayor:{saldo:0, saldoEf:0, saldoTr:0, movimientos:[]},
   contadorFactura:0,
   saldoBaseCaja:0,
 };
@@ -264,8 +264,8 @@ function renderDashboard() {
   // Pedidos fiados pendientes (entregados como fiado con saldo > 0, no cancelados)
   const pedFiadosPend=S.pedidos.filter(p=>p.estado==='entregado'&&p.pago==='fiado'&&(p.saldo===undefined||p.saldo>0)).reduce((a,p)=>a+(p.saldo!==undefined?p.saldo:p.total),0);
   const bajo=S.productos.filter(p=>p.stock<=p.min).length;
-  const totalCompra=S.productos.reduce((a,p)=>a+(p.tipo==='granel'?(p.compra||0):(p.compra||0)*(p.stock||0)),0);
-  const totalVenta=S.productos.reduce((a,p)=>a+(p.tipo==='granel'?(p.venta||0):(p.venta||0)*(p.stock||0)),0);
+  const totalCompra=S.productos.reduce((a,p)=>a+(p.tipo==='granel'?(p.compra||0)*(p.stock||0):(p.compra||0)*(p.stock||0)),0);
+  const totalVenta=S.productos.reduce((a,p)=>a+(p.tipo==='granel'?(p.precioUnidad||0)*(p.stock||0):(p.venta||0)*(p.stock||0)),0);
   // Utilidad real = (precio venta - precio compra) * qty vendida
   const calcUtilidad=(ventas)=>{
     let u=0;
@@ -304,7 +304,7 @@ function renderDashboard() {
     <div class="sc"><div class="sc-label">Inventario compra</div><div class="sc-val b" style="font-size:15px">${fmt(totalCompra)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">${S.productos.length} productos</div></div>
     <div class="sc"><div class="sc-label">Inventario venta</div><div class="sc-val g" style="font-size:15px">${fmt(totalVenta)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">Ganancia pot: ${fmt(totalVenta-totalCompra)}</div></div>
     <div class="sc"><div class="sc-label">Stock bajo</div><div class="sc-val ${bajo>0?'o':''}">${bajo}</div></div>
-    <div class="sc" style="cursor:pointer;border:2px solid var(--a-l)" onclick="goTo('cajaMayor')"><div class="sc-label">🏦 Caja Mayor</div><div class="sc-val g">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">saldo acumulado</div></div>
+    <div class="sc" style="cursor:pointer;border:2px solid var(--a-l)" onclick="goTo('cajaMayor')"><div class="sc-label">🏦 Caja Mayor</div><div class="sc-val g">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">💵 ${fmt((S.cajaMayor&&S.cajaMayor.saldoEf)||0)} · 📲 ${fmt((S.cajaMayor&&S.cajaMayor.saldoTr)||0)}</div></div>
     <div class="sc" style="border:2px solid ${utilidadHoy>=0?'var(--info-l)':'var(--danger-l)'}"><div class="sc-label">💹 Utilidad hoy</div><div class="sc-val ${utilidadHoy>=0?'g':'o'}" style="font-size:16px">${fmt(utilidadHoy)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">margen bruto hoy</div></div>
     <div class="sc" style="border:2px solid ${utilidadMes>=0?'var(--info-l)':'var(--danger-l)'}"><div class="sc-label">📅 Utilidad del mes</div><div class="sc-val ${utilidadMes>=0?'g':'o'}" style="font-size:16px">${fmt(utilidadMes)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">margen bruto ${mesActual}</div></div>`;
   const dv=document.getElementById('dash-ventas');
@@ -2294,12 +2294,16 @@ window.guardarGasto=async function(){
     prov.deuda=(prov.deuda||0)+monto;
     await guardarDoc('proveedores',prov._id,{deuda:prov.deuda});
   }
-  if(data.pago==='caja_mayor'){
-    if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+  if(data.pago==='caja_mayor_ef'||data.pago==='caja_mayor_tr'){
+    if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
+    const esCmEf=data.pago==='caja_mayor_ef';
     S.cajaMayor.saldo=Math.max(0,(S.cajaMayor.saldo||0)-monto);
+    if(esCmEf) S.cajaMayor.saldoEf=Math.max(0,(S.cajaMayor.saldoEf||0)-monto);
+    else S.cajaMayor.saldoTr=Math.max(0,(S.cajaMayor.saldoTr||0)-monto);
     S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
       {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
-       tipo:'gasto',desc:(data.descripcion||TIPOS_GASTO[data.tipo]||data.tipo),monto:-monto}];
+       tipo:'gasto',desc:(data.descripcion||TIPOS_GASTO[data.tipo]||data.tipo),monto:-monto,
+       tipoPago:esCmEf?'efectivo':'transferencia'}];
     await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   }
   cerrarMo('mo-gasto'); renderGastos(); toast('Gasto registrado: '+fmt(monto));
@@ -2309,21 +2313,27 @@ window.eliminarGasto=async function(id){
   const g=S.gastos.find(x=>x._id===id);
   if(!g)return;
   if(!confirm('¿Eliminar este gasto de '+fmt(g.monto)+'?'))return;
-  // Si era de caja mayor, devolver el monto al saldo
-  if(g.pago==='caja_mayor'||g.pago==='Caja Mayor'){
-    if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+  // Si era de caja mayor, devolver saldo Y eliminar el movimiento original
+  if(g.pago==='caja_mayor_ef'||g.pago==='caja_mayor_tr'||g.pago==='caja_mayor'||g.pago==='Caja Mayor'){
+    if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
     S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+g.monto;
-    // Registrar devolución en movimientos
-    S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
-      {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
-       tipo:'devolucion_gasto',desc:'Gasto eliminado: '+(g.desc||g.descripcion||''),monto:g.monto}];
+    if(g.pago==='caja_mayor_ef') S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+g.monto;
+    else if(g.pago==='caja_mayor_tr') S.cajaMayor.saldoTr=(S.cajaMayor.saldoTr||0)+g.monto;
+    const desc=g.descripcion||g.desc||'';
+    const movs=S.cajaMayor.movimientos||[];
+    const idx=movs.findIndex(m=>m.tipo==='gasto'&&m.monto===-g.monto&&(m.desc===desc||m.desc===(g.tipo||'')));
+    if(idx>=0) S.cajaMayor.movimientos=movs.filter((_,i)=>i!==idx);
+    else {
+      const idx2=movs.findIndex(m=>m.monto===-g.monto&&m.fecha===g.fecha);
+      if(idx2>=0) S.cajaMayor.movimientos=movs.filter((_,i)=>i!==idx2);
+    }
     await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   }
   await borrarDoc('gastos',id);
   S.gastos=S.gastos.filter(x=>x._id!==id);
   renderGastos();
   renderDashboard();
-  toast('✓ Gasto eliminado'+(g.pago==='caja_mayor'||g.pago==='Caja Mayor'?' — '+fmt(g.monto)+' devueltos a Caja Mayor':''));
+  toast('✓ Gasto eliminado'+(g.pago==='caja_mayor'||g.pago==='Caja Mayor'?' — movimiento eliminado de Caja Mayor':''));
 };
 
 // ══════════════════════════════════════════
@@ -2449,8 +2459,10 @@ window.confirmarPagoProveedor=async function(){
 //  CAJA MAYOR
 // ══════════════════════════════════════════
 function renderCajaMayor(){
-  if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+  if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
   const saldo=S.cajaMayor.saldo||0;
+  const saldoEf=S.cajaMayor.saldoEf||0;
+  const saldoTr=S.cajaMayor.saldoTr||0;
   const todosMovs=S.cajaMayor.movimientos||[];
   const totalEntradas=todosMovs.filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
   const totalSalidas=Math.abs(todosMovs.filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
@@ -2469,9 +2481,19 @@ function renderCajaMayor(){
   document.getElementById('cajaMayor-content').innerHTML=`
     <div class="stats-grid" style="margin-bottom:16px">
       <div class="sc" style="border:2px solid var(--accent)">
-        <div class="sc-label">Saldo actual</div>
-        <div class="sc-val g" style="font-size:28px">${fmt(saldo)}</div>
-        <div style="font-size:10px;color:var(--t3);margin-top:3px">${todosMovs.length} movimientos total</div>
+        <div class="sc-label">Saldo total</div>
+        <div class="sc-val g" style="font-size:24px">${fmt(saldo)}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:3px">${todosMovs.length} movimientos</div>
+      </div>
+      <div class="sc" style="border:2px solid var(--navy)">
+        <div class="sc-label">💵 Efectivo</div>
+        <div class="sc-val b" style="font-size:22px">${fmt(saldoEf)}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:3px">saldo en efectivo</div>
+      </div>
+      <div class="sc" style="border:2px solid var(--purple)">
+        <div class="sc-label">📲 Transferencia</div>
+        <div class="sc-val p" style="font-size:22px">${fmt(saldoTr)}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:3px">saldo en transferencia</div>
       </div>
       <div class="sc"><div class="sc-label">Total entradas</div><div class="sc-val b">${fmt(totalEntradas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">todos los cierres</div></div>
       <div class="sc"><div class="sc-label">Total salidas</div><div class="sc-val o">${fmt(totalSalidas)}</div><div style="font-size:10px;color:var(--t3);margin-top:3px">todos los gastos</div></div>
@@ -2489,12 +2511,15 @@ function renderCajaMayor(){
     ${movMostrar.length?`
     <div class="card">
       <div style="font-weight:600;font-size:14px;margin-bottom:12px">Movimientos${mesFiltro?' - '+nombreMes(mesFiltro):''}</div>
-      <div class="tw"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripcion</th><th>Monto</th></tr></thead><tbody>
+      <div class="tw"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Tipo</th><th>Descripcion</th><th>Medio</th><th>Monto</th></tr></thead><tbody>
         ${movMostrar.map(m=>`<tr>
           <td style="font-size:12px">${fmtF(m.fecha)}</td>
           <td style="font-size:12px;color:var(--t3)">${m.hora||'-'}</td>
           <td><span class="badge ${m.tipo==='cierre'?'bg':'br'}">${m.tipo==='cierre'?'Cierre':'Gasto'}</span></td>
           <td style="font-size:12px;color:var(--t2)">${m.desc||'-'}${m.quedaEnMenor!==undefined?'<div style="font-size:10px;color:var(--t3)">Quedo en menor: '+fmt(m.quedaEnMenor)+'</div>':''}</td>
+          <td style="font-size:11px">
+            ${m.tipoPago?'<span class="badge '+(m.tipoPago==='efectivo'?'bb':'bpu')+'">'+(m.tipoPago==='efectivo'?'💵 Efectivo':'📲 Transfer.')+'</span>':m.ef!==undefined?'<span style="font-size:10px;color:var(--t3)">Ef: '+fmt(m.ef||0)+' · Tr: '+fmt(m.tr||0)+'</span>':'—'}
+          </td>
           <td class="mono" style="font-weight:600;color:${m.monto>=0?'var(--info)':'var(--danger)'}">
             ${m.monto>=0?'+':''}${fmt(m.monto)}
           </td>
@@ -2519,28 +2544,38 @@ window.abrirCierreMenorModal=function(){
   const gastosDia=S.gastos.filter(g=>g.fecha===fecha&&(g.pago==='efectivo'||g.pago==='caja_menor'));
   const gastosEf=gastosDia.reduce((a,g)=>a+g.monto,0);
   const totalCobrado=ef+tr;
-  const cajaFinal=totalCobrado-gastosEf;
+  const efFinal=Math.max(0,ef-gastosEf);
+  const cajaFinal=efFinal+tr;
+  const cmEf=S.cajaMayor&&S.cajaMayor.saldoEf||0;
+  const cmTr=S.cajaMayor&&S.cajaMayor.saldoTr||0;
   document.getElementById('cierre-menor-resumen').innerHTML=`
     <div style="background:var(--s2);border-radius:var(--rs);padding:12px;font-size:13px">
-      ${(S.saldoBaseCaja||0)>0?`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>💰 Base en caja (día anterior)</span><span class="mono" style="color:var(--navy);font-weight:700">${fmt(S.saldoBaseCaja||0)}</span>
-      </div>`:''}
-      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>Cobrado hoy (efectivo + transfer.)</span><span class="mono" style="color:var(--info)">${fmt(totalCobrado)}</span>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div style="background:var(--navy-l);border-radius:var(--rs);padding:9px;text-align:center">
+          <div style="font-size:10px;color:var(--navy);font-weight:600;margin-bottom:3px">💵 EFECTIVO HOY</div>
+          <div style="font-size:16px;font-weight:700;color:var(--navy)">${fmt(ef)}</div>
+          <div style="font-size:10px;color:var(--t3)">- gastos: ${fmt(gastosEf)}</div>
+          <div style="font-size:13px;font-weight:700;color:var(--a-d);margin-top:3px">= ${fmt(efFinal)}</div>
+        </div>
+        <div style="background:var(--purple-l);border-radius:var(--rs);padding:9px;text-align:center">
+          <div style="font-size:10px;color:var(--purple);font-weight:600;margin-bottom:3px">📲 TRANSFERENCIA HOY</div>
+          <div style="font-size:16px;font-weight:700;color:var(--purple)">${fmt(tr)}</div>
+          <div style="font-size:10px;color:var(--t3)">sin gastos</div>
+          <div style="font-size:13px;font-weight:700;color:var(--a-d);margin-top:3px">= ${fmt(tr)}</div>
+        </div>
       </div>
-      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>Gastos pagados en efectivo/caja menor</span><span class="mono" style="color:var(--danger)">- ${fmt(gastosEf)}</span>
+      <div style="display:flex;justify-content:space-between;padding:6px 0;font-weight:700;font-size:14px;border-top:2px solid var(--border)">
+        <span>💰 Total pasa a Caja Mayor</span>
+        <span class="mono" style="color:var(--a-d)">${fmt(cajaFinal)}</span>
       </div>
-      <div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:15px;border-top:2px solid var(--border);margin-top:4px">
-        <span>💵 Saldo disponible en caja</span>
-        <span class="mono" style="color:${cajaFinal>=0?'var(--a-d)':'var(--danger)'}">${fmt(cajaFinal)}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px;color:var(--t3)">
-        <span>🏦 Saldo actual caja mayor</span><span class="mono">${fmt((S.cajaMayor&&S.cajaMayor.saldo)||0)}</span>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;font-size:11px;color:var(--t3)">
+        <div>🏦 Caja Mayor efectivo actual: <strong>${fmt(cmEf)}</strong></div>
+        <div>🏦 Caja Mayor transfer. actual: <strong>${fmt(cmTr)}</strong></div>
       </div>
     </div>`;
-  const saldoRealCaja=(S.saldoBaseCaja||0)+cajaFinal;
-  window._cierreMenorSaldo=saldoRealCaja;
+  window._cierreMenorEf=efFinal;
+  window._cierreMenorTr=tr;
+  window._cierreMenorSaldo=cajaFinal;
   document.getElementById('cm-monto-queda').value='';
   document.getElementById('cm-transferencia-result').textContent='';
   document.getElementById('cm-desc').value='Cierre '+fmtF(fecha);
@@ -2566,12 +2601,16 @@ window.confirmarCierreMenor=async function(){
   if(isNaN(queda)||queda<0){toast('Ingresa cuánto queda en caja menor',false);return;}
   if(queda>saldoCaja){toast('El monto supera el saldo disponible',false);return;}
   const pasa=saldoCaja-queda;
+  const pasaEf=window._cierreMenorEf||0;
+  const pasaTr=window._cierreMenorTr||0;
   const desc=document.getElementById('cm-desc').value.trim()||'Cierre caja menor';
-  if(!S.cajaMayor) S.cajaMayor={saldo:0,movimientos:[]};
+  if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
   S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+pasa;
+  S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+pasaEf;
+  S.cajaMayor.saldoTr=(S.cajaMayor.saldoTr||0)+pasaTr;
   S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
     {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
-     tipo:'cierre',desc,monto:pasa,quedaEnMenor:queda}];
+     tipo:'cierre',desc,monto:pasa,ef:pasaEf,tr:pasaTr,quedaEnMenor:queda}];
   await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   // Guardar saldo base para el día siguiente
   S.saldoBaseCaja = queda;
@@ -3369,7 +3408,8 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
         <option value="transferencia">📲 Transferencia</option>
         <option value="credito">📋 Crédito (pendiente)</option>
         <option value="caja_menor">💵 Caja menor (efectivo tienda)</option>
-        <option value="caja_mayor">🏦 Caja mayor</option>
+        <option value="caja_mayor_ef">🏦 Caja mayor — Efectivo</option>
+        <option value="caja_mayor_tr">🏦 Caja mayor — Transferencia</option>
       </select>
     </div>
   </div>
