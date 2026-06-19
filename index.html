@@ -2460,6 +2460,8 @@ window.confirmarPagoProveedor=async function(){
 // ══════════════════════════════════════════
 function renderCajaMayor(){
   if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
+  // Detectar si hay saldo sin clasificar (anterior a la separacion ef/tr)
+  const saldoSinClasif=(S.cajaMayor.saldo||0)-((S.cajaMayor.saldoEf||0)+(S.cajaMayor.saldoTr||0));
   const saldo=S.cajaMayor.saldo||0;
   const saldoEf=S.cajaMayor.saldoEf||0;
   const saldoTr=S.cajaMayor.saldoTr||0;
@@ -2478,7 +2480,10 @@ function renderCajaMayor(){
   const entradasMes=movFiltrados.filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
   const salidasMes=Math.abs(movFiltrados.filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
   const nombreMes=(mes)=>{if(!mes)return'';const[a,ms]=mes.split('-');const n=new Date(parseInt(a),parseInt(ms)-1,1).toLocaleDateString('es-CO',{month:'long',year:'numeric'});return n.charAt(0).toUpperCase()+n.slice(1);};
-  document.getElementById('cajaMayor-content').innerHTML=`
+  const _alertaSinClasif = saldoSinClasif>0
+    ? '<div style="background:var(--warn-l);border:1px solid var(--warn);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><span style="font-weight:600;color:var(--warn)">&#9888; Tienes '+fmt(saldoSinClasif)+' sin clasificar</span><div style="font-size:12px;color:var(--t2);margin-top:2px">Este saldo estaba en Caja Mayor antes de separar efectivo/transferencia</div></div><button class="btn" onclick="clasificarSaldoAnterior()" style="background:var(--warn);color:#fff;border-color:var(--warn)">Pasar todo a Efectivo</button></div>'
+    : '';
+  document.getElementById('cajaMayor-content').innerHTML= _alertaSinClasif + `
     <div class="stats-grid" style="margin-bottom:16px">
       <div class="sc" style="border:2px solid var(--accent)">
         <div class="sc-label">Saldo total</div>
@@ -2530,6 +2535,17 @@ function renderCajaMayor(){
 
 window.renderCajaMayor=renderCajaMayor;
 
+window.clasificarSaldoAnterior=async function(){
+  const sinClasif=(S.cajaMayor.saldo||0)-((S.cajaMayor.saldoEf||0)+(S.cajaMayor.saldoTr||0));
+  if(sinClasif<=0){toast('No hay saldo sin clasificar',false);return;}
+  if(!confirm('¿Pasar '+fmt(sinClasif)+' al saldo de efectivo de Caja Mayor?'))return;
+  S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+sinClasif;
+  await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
+  renderCajaMayor();
+  renderDashboard();
+  toast('✓ '+fmt(sinClasif)+' clasificados como efectivo en Caja Mayor');
+};
+
 window.abrirCierreMenorModal=function(){
   const fecha=document.getElementById('caja-fecha').value||hoy();
   // Verificar si ya hay cierre hoy
@@ -2576,6 +2592,7 @@ window.abrirCierreMenorModal=function(){
   window._cierreMenorEf=efFinal;
   window._cierreMenorTr=tr;
   window._cierreMenorSaldo=cajaFinal;
+  window._cierreMenorBase=S.saldoBaseCaja||0;
   document.getElementById('cm-monto-queda').value='';
   document.getElementById('cm-transferencia-result').textContent='';
   document.getElementById('cm-desc').value='Cierre '+fmtF(fecha);
@@ -2584,14 +2601,16 @@ window.abrirCierreMenorModal=function(){
 
 window.calcTransferenciaCajaMayor=function(){
   const saldoCaja=window._cierreMenorSaldo||0;
+  const base=window._cierreMenorBase||0;
   const queda=parseFloat(document.getElementById('cm-monto-queda').value)||0;
   const r=document.getElementById('cm-transferencia-result');
   if(queda<0){r.innerHTML='<span style="color:var(--danger)">⚠ Ingresa un valor positivo</span>';return;}
   const pasa=Math.max(0,saldoCaja-queda);
+  const quedaTotal=queda+(base);
   if(queda>saldoCaja){
-    r.innerHTML=`→ <strong style="color:var(--navy)">$0</strong> pasan a Caja Mayor <span style="color:var(--t3);font-size:12px">(queda más de lo disponible hoy — se acumula para el próximo cierre)</span>`;
+    r.innerHTML=`→ <strong style="color:var(--navy)">$0</strong> pasan a Caja Mayor${base>0?' <span style="color:var(--t3);font-size:11px">· base anterior '+fmt(base)+' se mantiene</span>':''}`;
   } else {
-    r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor`;
+    r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor${base>0?' <span style="color:var(--t3);font-size:11px">· nueva base en caja: '+fmt(quedaTotal)+'</span>':''}`;
   }
 };
 
@@ -2599,7 +2618,7 @@ window.confirmarCierreMenor=async function(){
   const saldoCaja=window._cierreMenorSaldo||0;
   const queda=parseFloat(document.getElementById('cm-monto-queda').value);
   if(isNaN(queda)||queda<0){toast('Ingresa cuánto queda en caja menor',false);return;}
-  if(queda>saldoCaja){toast('El monto supera el saldo disponible',false);return;}
+  if(queda>saldoCaja){toast('El monto supera el saldo de hoy ('+fmt(saldoCaja)+')',false);return;}
   const pasa=saldoCaja-queda;
   const pasaEf=window._cierreMenorEf||0;
   const pasaTr=window._cierreMenorTr||0;
@@ -2613,8 +2632,9 @@ window.confirmarCierreMenor=async function(){
      tipo:'cierre',desc,monto:pasa,ef:pasaEf,tr:pasaTr,quedaEnMenor:queda}];
   await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   // Guardar saldo base para el día siguiente
-  S.saldoBaseCaja = queda;
-  await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:queda,fecha:hoy()},{merge:true});
+  const nuevoBase = queda + (window._cierreMenorBase||0);
+  S.saldoBaseCaja = nuevoBase;
+  await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:nuevoBase,fecha:hoy()},{merge:true});
   // Calcular y guardar ganancia del dia en Firebase
   try {
     const fechaHoy = hoy();
@@ -2645,7 +2665,8 @@ window.confirmarCierreMenor=async function(){
   } catch(e){ console.log('Error guardando ganancia:', e); }
   cerrarMo('mo-cierre-menor');
   renderDashboard();
-  toast('✓ Cierre registrado — '+fmt(pasa)+' pasaron a Caja Mayor · Quedan '+fmt(queda)+' en Caja Menor');
+  const baseMsg=(window._cierreMenorBase||0)>0?' (incluye base anterior '+fmt(window._cierreMenorBase)+')':'';
+  toast('✓ Cierre registrado — '+fmt(pasa)+' a Caja Mayor · Base en caja: '+fmt(nuevoBase)+baseMsg);
 };
 
 // ══════════════════════════════════════════
@@ -2803,7 +2824,7 @@ document.addEventListener('click',e=>{
 </script>
 <script>
 // Bridge: expose module functions to inline event handlers
-function doLogin(){if(window.doLogin)window.doLogin();else alert('Cargando... intente de nuevo');}
+// doLogin bridge eliminado
 function doLogout(){if(window.doLogout)window.doLogout();}
 function goTo(p){if(window.goTo)window.goTo(p);}
 </script>
