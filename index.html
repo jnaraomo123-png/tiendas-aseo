@@ -2551,8 +2551,9 @@ window.abrirCierreMenorModal=function(){
   // Verificar si ya hay cierre hoy
   const yaHayCierre=(S.cajaMayor.movimientos||[]).some(m=>m.tipo==='cierre'&&m.fecha===fecha);
   if(yaHayCierre){
-    toast('⚠ Ya se realizó el cierre del '+fmtF(fecha)+'. Solo se permite un cierre por día.',false);
-    return;
+    if(!confirm('Ya existe un cierre para el '+fmtF(fecha)+'. Deseas hacer un cierre adicional?')){
+      return;
+    }
   }
   const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado');
   const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
@@ -2627,8 +2628,9 @@ window.confirmarCierreMenor=async function(){
   S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+pasa;
   S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+pasaEf;
   S.cajaMayor.saldoTr=(S.cajaMayor.saldoTr||0)+pasaTr;
+  const _fechaCierre = document.getElementById('caja-fecha').value || hoy();
   S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
-    {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+    {fecha:_fechaCierre,hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
      tipo:'cierre',desc,monto:pasa,ef:pasaEf,tr:pasaTr,quedaEnMenor:queda}];
   await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   // Guardar saldo base para el día siguiente
@@ -2637,7 +2639,7 @@ window.confirmarCierreMenor=async function(){
   await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:nuevoBase,fecha:hoy()},{merge:true});
   // Calcular y guardar ganancia del dia en Firebase
   try {
-    const fechaHoy = hoy();
+    const fechaHoy = document.getElementById('caja-fecha').value || hoy();
     const mesKey = fechaHoy.substring(0,7);
     const ventasHoy = S.ventas.filter(v=>v.fecha===fechaHoy&&v.pago!=='fiado');
     let gananciaDia = 0;
@@ -2824,7 +2826,7 @@ document.addEventListener('click',e=>{
 </script>
 <script>
 // Bridge: expose module functions to inline event handlers
-// doLogin bridge eliminado
+
 function doLogout(){if(window.doLogout)window.doLogout();}
 function goTo(p){if(window.goTo)window.goTo(p);}
 </script>
