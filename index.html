@@ -527,14 +527,25 @@ window.editarProd = function(id) {
   document.getElementById('barcode-modal-hint').style.display='none';
   if(p.tipo==='granel'){document.getElementById('p-unidad').value=p.unidad||'ml';document.getElementById('p-precio-u').value=p.precioUnidad||0;}
   toggleTipoProd();
-  // El stock NO se guarda desde aquí — se bloquea el campo para evitar que al
-  // editar solo el precio (u otro dato) se sobrescriba el stock real con un
-  // número desactualizado. Para ajustar stock se usa el botón "+" de Inventario.
+  // El stock NO se guarda desde aquí por defecto — se bloquea el campo para
+  // evitar que al editar solo el precio (u otro dato) se sobrescriba el stock
+  // real con un número desactualizado. Si necesitas corregirlo (ej. conteo
+  // físico de inventario), usa el enlace "corregir stock ahora".
   const ps=document.getElementById('p-stock');
+  ps.value=p.stock||0;
   ps.disabled=true; ps.style.opacity='.6';
   document.getElementById('p-stock-nota').style.display='block';
+  document.getElementById('p-stock-nota').innerHTML='🔒 Bloqueado al editar (para no pisarlo por error) — <a href="javascript:void(0)" onclick="desbloquearStock()" style="color:var(--warn);text-decoration:underline;font-weight:600">🔓 corregir stock ahora (conteo físico)</a>';
   document.getElementById('mo-prod-title').textContent='Editar producto';
   abrirMo('mo-prod');
+};
+
+// Desbloquea el campo de stock a propósito, para cuando el usuario necesita
+// corregirlo manualmente (ej. después de un conteo físico de inventario).
+window.desbloquearStock=function(){
+  const ps=document.getElementById('p-stock');
+  ps.disabled=false; ps.style.opacity='1'; ps.focus(); ps.select();
+  document.getElementById('p-stock-nota').innerHTML='⚠️ Vas a sobrescribir el stock de este producto al guardar — confirma que el número es el correcto (conteo físico)';
 };
 
 window.guardarProd = async function() {
@@ -557,14 +568,17 @@ window.guardarProd = async function() {
   // no se toca el stock aquí (queda bloqueado en el formulario) para no
   // sobrescribir el stock real con un valor desactualizado — el ajuste de
   // stock se hace con el botón "+" en Inventario.
-  if(!S.editProd) data.stock = stock;
+  // El stock se incluye si es un producto nuevo, o si el usuario desbloqueó
+  // el campo a propósito para corregirlo (conteo físico de inventario).
+  const stockDesbloqueado = document.getElementById('p-stock').disabled===false;
+  if(!S.editProd || stockDesbloqueado) data.stock = stock;
   if(tipo==='granel'){data.unidad=document.getElementById('p-unidad').value;data.precioUnidad=parseFloat(document.getElementById('p-precio-u').value)||0;}
   try {
     if(S.editProd){
       await guardarDoc('productos',S.editProd,data);
       const i=S.productos.findIndex(p=>p._id===S.editProd);
       S.productos[i]={...S.productos[i],...data};
-      toast('Producto actualizado (el stock no se modificó)');
+      toast(stockDesbloqueado?'Producto actualizado — stock corregido a '+stock:'Producto actualizado (el stock no se modificó)');
     } else {
       const newId=await agregarDoc('productos',data);
       S.productos.push({_id:newId,...data});
@@ -3407,7 +3421,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
   </div>
   <div class="form-row">
     <div class="fg"><label class="fl">Stock *</label><input class="fi" id="p-stock" type="number" min="0" placeholder="0">
-      <div id="p-stock-nota" style="display:none;font-size:11px;color:var(--warn);margin-top:3px">🔒 Bloqueado al editar — usa el botón "+" en Inventario para ajustar el stock</div>
+      <div id="p-stock-nota" style="display:none;font-size:11px;color:var(--warn);margin-top:3px">🔒 Bloqueado al editar (para no pisarlo por error) — <a href="javascript:void(0)" onclick="desbloquearStock()" style="color:var(--warn);text-decoration:underline;font-weight:600">🔓 corregir stock ahora (conteo físico)</a></div>
     </div>
     <div class="fg"><label class="fl">Stock mínimo (alerta)</label><input class="fi" id="p-min" type="number" min="0" placeholder="5"></div>
   </div>
