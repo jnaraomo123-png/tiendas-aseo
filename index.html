@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -222,6 +223,24 @@ function hoy()  {
   return `${y}-${m}-${day}`;
 }
 function fmt(n) { return '$'+Number(n||0).toLocaleString('es-CO'); }
+// Ganancia de una venta: si trae gananciaProporcional (viene de un abono parcial
+// de fiado/pedido) se usa ese valor directo; si no, se calcula (precio-compra)*qty
+// de cada producto de la venta.
+function calcGananciaVenta(v){
+  if(v.gananciaProporcional!==undefined) return v.gananciaProporcional;
+  let g=0;
+  (v.items||[]).forEach(item=>{
+    const prod=S.productos.find(p=>p._id===item._id);
+    const compra=prod?(prod.compra||0):0;
+    if(item.tipo==='granel'){
+      g+=(item.precio||0)-compra*(item.cantGranel||0);
+    } else {
+      g+=((item.precio||0)-compra)*(item.qty||1);
+    }
+  });
+  return g;
+}
+window.calcGananciaVenta=calcGananciaVenta;
 function fmtF(s){ return new Date(s+'T00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}); }
 window.fmt = fmt;
 window.fmtF = fmtF;
@@ -258,8 +277,10 @@ function renderDashboard() {
   const el=document.getElementById('dash-fecha');
   if(el) el.textContent=new Date().toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const vhoy=S.ventas.filter(v=>v.fecha===td&&v.pago!=='fiado');
-  const ef=vhoy.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
-  const tr=vhoy.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
+  const ef=vhoy.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0)
+    + vhoy.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoEfectivo||0),0);
+  const tr=vhoy.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0)
+    + vhoy.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoTransferencia||0),0);
   const fpend=S.fiados.filter(f=>f.estado==='pendiente').reduce((a,f)=>a+(f.saldo!==undefined?f.saldo:f.total),0);
   // Pedidos fiados pendientes (entregados como fiado con saldo > 0, no cancelados)
   const pedFiadosPend=S.pedidos.filter(p=>p.estado==='entregado'&&p.pago==='fiado'&&(p.saldo===undefined||p.saldo>0)).reduce((a,p)=>a+(p.saldo!==undefined?p.saldo:p.total),0);
@@ -271,22 +292,7 @@ function renderDashboard() {
     let u=0;
     ventas.forEach(v=>{
       if(v.pago==='fiado')return;
-      (v.items||[]).forEach(item=>{
-        const prod=S.productos.find(p=>p._id===item._id);
-        if(item.tipo==='granel'){
-          // item.precio = total vendido (precioUnidad * cantGranel)
-          // costo = precioCompra/unidad * cantGranel
-          const totalVenta=item.precio||0;
-          const costoTotal=(prod?(prod.compra||0):0)*(item.cantGranel||0);
-          u+=totalVenta-costoTotal;
-        } else {
-          // item.precio = precio unitario
-          const pventa=item.precio||0;
-          const compra=prod?(prod.compra||0):0;
-          const qty=item.qty||1;
-          u+=(pventa-compra)*qty;
-        }
-      });
+      u+=calcGananciaVenta(v);
     });
     return u;
   };
@@ -491,6 +497,9 @@ window.abrirModalProd = function() {
   ['p-nom','p-cat','p-compra','p-venta','p-stock','p-min','p-precio-u','p-mayor','p-mayor-min'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('p-tipo').value='unidad';
   document.getElementById('p-unidad').value='ml';
+  const ps=document.getElementById('p-stock');
+  ps.disabled=false; ps.style.opacity='1';
+  document.getElementById('p-stock-nota').style.display='none';
   toggleTipoProd();
   document.getElementById('mo-prod-title').textContent='Agregar producto';
   abrirMo('mo-prod');
@@ -518,6 +527,12 @@ window.editarProd = function(id) {
   document.getElementById('barcode-modal-hint').style.display='none';
   if(p.tipo==='granel'){document.getElementById('p-unidad').value=p.unidad||'ml';document.getElementById('p-precio-u').value=p.precioUnidad||0;}
   toggleTipoProd();
+  // El stock NO se guarda desde aquí — se bloquea el campo para evitar que al
+  // editar solo el precio (u otro dato) se sobrescriba el stock real con un
+  // número desactualizado. Para ajustar stock se usa el botón "+" de Inventario.
+  const ps=document.getElementById('p-stock');
+  ps.disabled=true; ps.style.opacity='.6';
+  document.getElementById('p-stock-nota').style.display='block';
   document.getElementById('mo-prod-title').textContent='Editar producto';
   abrirMo('mo-prod');
 };
@@ -534,17 +549,22 @@ window.guardarProd = async function() {
   }
   const data={nombre:nom,categoria:document.getElementById('p-cat').value.trim()||'General',tipo,barcode,
     compra:parseFloat(document.getElementById('p-compra').value)||0,
-    venta:parseFloat(document.getElementById('p-venta').value)||0,stock,
+    venta:parseFloat(document.getElementById('p-venta').value)||0,
     min:parseFloat(document.getElementById('p-min').value)||5,
     precioMayor:parseFloat(document.getElementById('p-mayor').value)||0,
     cantMinMayor:parseInt(document.getElementById('p-mayor-min').value)||0};
+  // El stock solo se incluye al CREAR un producto nuevo. Al editar uno existente
+  // no se toca el stock aquí (queda bloqueado en el formulario) para no
+  // sobrescribir el stock real con un valor desactualizado — el ajuste de
+  // stock se hace con el botón "+" en Inventario.
+  if(!S.editProd) data.stock = stock;
   if(tipo==='granel'){data.unidad=document.getElementById('p-unidad').value;data.precioUnidad=parseFloat(document.getElementById('p-precio-u').value)||0;}
   try {
     if(S.editProd){
       await guardarDoc('productos',S.editProd,data);
       const i=S.productos.findIndex(p=>p._id===S.editProd);
       S.productos[i]={...S.productos[i],...data};
-      toast('Producto actualizado');
+      toast('Producto actualizado (el stock no se modificó)');
     } else {
       const newId=await agregarDoc('productos',data);
       S.productos.push({_id:newId,...data});
@@ -727,6 +747,9 @@ window.limpiarCarrito=function(){
   const dr=document.getElementById('v-desc-result');if(dr)dr.textContent='';
   const cn=document.getElementById('v-cli-nom');if(cn)cn.value='';
   const ct=document.getElementById('v-cli-tel');if(ct)ct.value='';
+  const me=document.getElementById('v-mixto-ef');if(me)me.value='';
+  const mt=document.getElementById('v-mixto-tr');if(mt)mt.value='';
+  const mr=document.getElementById('v-mixto-result');if(mr)mr.innerHTML='';
 };
 
 window.calcDescuento=function(){
@@ -741,10 +764,30 @@ window.calcDescuento=function(){
 
 window.selPago = function(t) {
   S.pagoTipo=t;
-  ['efectivo','transferencia','fiado'].forEach(x=>document.getElementById('po-'+x).classList.toggle('sel',x===t));
+  ['efectivo','transferencia','fiado','mixto'].forEach(x=>document.getElementById('po-'+x).classList.toggle('sel',x===t));
   document.getElementById('fiado-f').style.display=t==='fiado'?'block':'none';
+  document.getElementById('mixto-f').style.display=t==='mixto'?'block':'none';
+  if(t==='mixto') window.calcMixto();
 };
 function selPago(t){window.selPago(t);}
+
+window.calcMixto = function(){
+  const subtotal=S.carrito.reduce((a,c)=>a+c.precio*c.qty,0);
+  const descuento=parseFloat(document.getElementById('v-descuento')?.value)||0;
+  const total=Math.max(0,subtotal-descuento);
+  const ef=parseFloat(document.getElementById('v-mixto-ef')?.value)||0;
+  const tr=parseFloat(document.getElementById('v-mixto-tr')?.value)||0;
+  const res=document.getElementById('v-mixto-result');
+  if(!res)return;
+  const diff=Math.round((total-ef-tr)*100)/100;
+  if(diff===0 && total>0){
+    res.innerHTML='<span style="color:var(--info);font-weight:600">✓ Cuadra con el total: '+fmt(total)+'</span>';
+  } else if(diff>0){
+    res.innerHTML='<span style="color:var(--warn)">Falta '+fmt(diff)+' para completar '+fmt(total)+'</span>';
+  } else {
+    res.innerHTML='<span style="color:var(--danger)">Sobra '+fmt(Math.abs(diff))+' — ajusta los montos</span>';
+  }
+};
 
 window.procesarVenta = async function() {
   if(!S.carrito.length){toast('Carrito vacío',false);return;}
@@ -776,6 +819,24 @@ window.procesarVenta = async function() {
     document.getElementById('btn-confirmar-ef').disabled=true;
     abrirMo('mo-vueltos');
     setTimeout(()=>document.getElementById('pago-cliente').focus(),100);
+  } else if(S.pagoTipo==='mixto'){
+    const ef=parseFloat(document.getElementById('v-mixto-ef')?.value)||0;
+    const tr=parseFloat(document.getElementById('v-mixto-tr')?.value)||0;
+    if(Math.round((ef+tr)*100)!==Math.round(total*100)){
+      toast('El efectivo + la transferencia deben sumar exactamente el total ('+fmt(total)+')',false);
+      return;
+    }
+    const numFacM=await getNextNumFactura();
+    const cliNomM=document.getElementById('v-cli-nom')?.value.trim()||'';
+    const cliTelM=document.getElementById('v-cli-tel')?.value.trim()||'';
+    const vData={fecha:hoy(),hora,pago:'mixto',total,descuento:descuento||0,subtotal:subtotal||total,
+      numFactura:numFacM,cliente:cliNomM||undefined,telefono:cliTelM||undefined,
+      items:S.carrito.map(c=>({...c})),montoEfectivo:ef,montoTransferencia:tr,vueltos:0};
+    const vId=await agregarDoc('ventas',vData);
+    S.ventas.push({_id:vId,...vData});
+    await descontarStock(); window.limpiarCarrito(); renderDashboard(); if(document.getElementById('page-inventario')?.classList.contains('active')) renderInventario();
+    toast('Venta #'+numFacM+' — '+fmt(total)+' (💵 '+fmt(ef)+' + 📲 '+fmt(tr)+')');
+    mostrarTicket({_id:vId,...vData});
   } else {
     const numFac=await getNextNumFactura();
     const cliNom=document.getElementById('v-cli-nom')?.value.trim()||'';
@@ -946,8 +1007,10 @@ window.eliminarFiado=async function(id){
   const f=S.fiados.find(x=>x._id===id);
   if(!f)return;
   const tienePagos=(f.pagos||[]).length>0;
+  const abonoVentas=S.ventas.filter(v=>v.esAbono&&v.origenTipo==='fiado'&&v.origenId===id);
+  const totalAbonado=abonoVentas.reduce((a,v)=>a+(v.total||0),0);
   const msg=tienePagos
-    ?`¿Eliminar fiado de ${f.cliente}? Tiene abonos registrados. Se devolverá el stock al inventario.`
+    ?`¿Eliminar fiado de ${f.cliente}? Tiene abonos registrados por ${fmt(totalAbonado)} — ese dinero y su ganancia también se quitarán de caja y de los reportes. Se devolverá el stock al inventario.`
     :`¿Eliminar fiado de ${f.cliente} por ${fmt(f.total)}? Se devolverá el stock.`;
   if(!confirm(msg))return;
   // Devolver stock
@@ -959,11 +1022,18 @@ window.eliminarFiado=async function(id){
       await guardarDoc('productos',prod._id,{stock:prod.stock});
     }
   }
+  // Borrar también los abonos ya cobrados de este fiado, para que ese dinero
+  // y esa ganancia no se queden "flotando" en caja y en los reportes después
+  // de eliminar la factura de la que vinieron.
+  for(const v of abonoVentas){
+    await borrarDoc('ventas',v._id);
+  }
+  S.ventas=S.ventas.filter(v=>!(v.esAbono&&v.origenTipo==='fiado'&&v.origenId===id));
   await borrarDoc('fiados',id);
   S.fiados=S.fiados.filter(x=>x._id!==id);
   renderFiados();
   renderDashboard();
-  toast('Fiado eliminado y stock devuelto');
+  toast(tienePagos?'Fiado eliminado — stock devuelto y '+fmt(totalAbonado)+' de abonos quitados de caja':'Fiado eliminado y stock devuelto');
 };
 
 window.abrirCobrar = function(id) {
@@ -1025,6 +1095,7 @@ function generarTextoTicket(v){
   if(v.descuento>0){t+=lj('Subtotal:',fmt(v.subtotal||v.total+v.descuento))+'\n';t+=lj('Descuento:','- '+fmt(v.descuento))+'\n';}
   t+=lj('TOTAL:',fmt(v.total))+'\n';
   if(v.pago==='efectivo'){t+=lj('Efectivo:',fmt(v.pagoCliente||v.total))+'\n';t+=lj('Vueltos:',fmt(v.vueltos||0))+'\n';}
+  else if(v.pago==='mixto'){t+=lj('Efectivo:',fmt(v.montoEfectivo||0))+'\n';t+=lj('Transferencia:',fmt(v.montoTransferencia||0))+'\n';}
   else t+=lj('Pago:','Transferencia')+'\n';
   t+=lin+'\n';
   t+=ctr(S.config.mensaje||'¡Gracias por su compra!')+'\n';
@@ -1056,8 +1127,10 @@ window.imprimirVentaHistorial=(id)=>{const v=S.ventas.find(x=>x._id===id);if(v)m
 function renderCierre(){
   const fecha=document.getElementById('caja-fecha').value||hoy();
   const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado').sort((a,b)=>(a.hora||'00:00').localeCompare(b.hora||'00:00'));
-  const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
-  const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
+  const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0)
+    + vd.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoEfectivo||0),0);
+  const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0)
+    + vd.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoTransferencia||0),0);
   const abonosEf=vd.filter(v=>v.esAbono&&v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
   const abonosTr=vd.filter(v=>v.esAbono&&v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
   const fpend=S.fiados.filter(f=>f.estado==='pendiente').reduce((a,f)=>a+(f.saldo!==undefined?f.saldo:f.total),0);
@@ -1115,11 +1188,13 @@ function renderCierre(){
       ${vd.length?`<div class="tw"><table><thead><tr><th>Hora</th><th>Detalle</th><th>Pago</th><th>Monto</th><th></th></tr></thead><tbody>
         ${vd.map(v=>`<tr><td class="mono" style="font-size:12px">${v.hora||'—'}</td>
         <td style="font-size:12px;color:var(--t2)">${v.esAbono?'Abono: '+v.cliente:v.esPedido?'Pedido: '+v.cliente:v.items.map(i=>i.nombre+(i.qty>1?' ×'+i.qty:'')).join(', ')}</td>
-        <td><span class="badge ${v.pago==='efectivo'?'bb':'bpu'}">${v.pago}</span>${v.esAbono?'<span class="badge by" style="margin-left:4px">abono</span>':''}</td>
+        <td><span class="badge ${v.pago==='efectivo'?'bb':v.pago==='mixto'?'bpu':'bpu'}">${v.pago==='mixto'?'💵+📲 mixto':v.pago}</span>${v.esAbono?'<span class="badge by" style="margin-left:4px">abono</span>':''}
+        ${v.pago==='mixto'?'<div style="font-size:10px;color:var(--t3);margin-top:2px">Ef: '+fmt(v.montoEfectivo||0)+' · Tr: '+fmt(v.montoTransferencia||0)+'</div>':''}</td>
         <td class="mono" style="font-weight:500">${fmt(v.total)}</td>
         <td><div style="display:flex;gap:4px">
           <button class="btn bsm" onclick="imprimirVentaHistorial('${v._id}')">🖨</button>
           ${!v.esAbono&&!v.esPedido?`<button class="btn bsm" onclick="abrirEditarVenta('${v._id}')" title="Editar">✏️</button>`:''}
+          ${!v.esAbono&&!v.esPedido?`<button class="btn bsm" style="background:var(--danger-l);color:var(--danger);border:1px solid var(--danger)" onclick="eliminarVenta('${v._id}')" title="Eliminar venta completa">🗑</button>`:''}
         </div></td></tr>`).join('')}
       </tbody></table></div>`:'<div style="color:var(--t3);font-size:13px">Sin ventas para esta fecha</div>'}
     </div>
@@ -1169,8 +1244,10 @@ window.renderReporte = function() {
   const dom=getDom(lunes);
   const vS=S.ventas.filter(v=>v.fecha>=lunes&&v.fecha<=dom&&v.pago!=='fiado');
   const tot=vS.reduce((a,v)=>a+v.total,0);
-  const ef=vS.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
-  const tr=vS.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
+  const ef=vS.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0)
+    + vS.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoEfectivo||0),0);
+  const tr=vS.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0)
+    + vS.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoTransferencia||0),0);
   const lA=new Date(lunes+'T00:00');lA.setDate(lA.getDate()-7);
   const lAs=lA.toISOString().split('T')[0];
   const vA=S.ventas.filter(v=>v.fecha>=lAs&&v.fecha<=getDom(lAs)&&v.pago!=='fiado');
@@ -1251,17 +1328,7 @@ window.mostrarGananciaMes = function() {
   const totalVentas = vMes.reduce((s,v)=>s+(v.total||0),0);
 
   let gananciaTotal = 0;
-  vMes.forEach(v=>{
-    (v.items||[]).forEach(item=>{
-      const prod = S.productos.find(p=>p._id===item._id);
-      const compra = prod?(prod.compra||0):0;
-      if(item.tipo==='granel'){
-        gananciaTotal += (item.precio||0) - compra*(item.cantGranel||0);
-      } else {
-        gananciaTotal += ((item.precio||0)-compra)*(item.qty||1);
-      }
-    });
-  });
+  vMes.forEach(v=>{ gananciaTotal += calcGananciaVenta(v); });
 
   // Agrupar por dia
   const porDia = {};
@@ -1269,15 +1336,7 @@ window.mostrarGananciaMes = function() {
     if(!porDia[v.fecha]) porDia[v.fecha]={ventas:0,ganancia:0,num:0};
     porDia[v.fecha].ventas += (v.total||0);
     porDia[v.fecha].num++;
-    (v.items||[]).forEach(item=>{
-      const prod = S.productos.find(p=>p._id===item._id);
-      const compra = prod?(prod.compra||0):0;
-      if(item.tipo==='granel'){
-        porDia[v.fecha].ganancia += (item.precio||0)-compra*(item.cantGranel||0);
-      } else {
-        porDia[v.fecha].ganancia += ((item.precio||0)-compra)*(item.qty||1);
-      }
-    });
+    porDia[v.fecha].ganancia += calcGananciaVenta(v);
   });
 
   const diasArr = Object.keys(porDia).sort();
@@ -1829,9 +1888,27 @@ window.confirmarAbono=async function(){
   // Solo entra a caja si el abono es en efectivo o transferencia
   // Si es "fiado", solo reduce el saldo pero NO entra al cierre del día
   if(met!=='fiado'){
+    // Ganancia proporcional: la ganancia de la factura completa se reparte según
+    // qué fracción del total original representa este abono, para no contar
+    // la ganancia completa cada vez que llega un abono parcial.
+    const totalOriginal = obj.total || monto;
+    const ratio = totalOriginal>0 ? (monto/totalOriginal) : 1;
+    let gananciaFactura = 0;
+    (obj.items||[]).forEach(item=>{
+      const prod = S.productos.find(p=>p._id===item._id);
+      const compra = prod?(prod.compra||0):0;
+      if(item.tipo==='granel'){
+        gananciaFactura += (item.precio||0) - compra*(item.cantGranel||0);
+      } else {
+        gananciaFactura += ((item.precio||0)-compra)*(item.qty||1);
+      }
+    });
+    const gananciaProporcional = Math.round(gananciaFactura*ratio*100)/100;
     const vData={fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
       pago:met,total:monto,items:obj.items||[],
       esAbono:true,cliente:obj.cliente,pagoCliente:monto,vueltos:0,
+      gananciaProporcional,
+      origenTipo:tipo,origenId:id,
       nota:'Abono '+(tipo==='fiado'?'fiado':'pedido fiado')+': '+obj.cliente};
     const vId=await agregarDoc('ventas',vData);
     S.ventas.push({_id:vId,...vData});
@@ -2118,6 +2195,29 @@ window.abrirEditarVenta=function(id){
   abrirMo('mo-editar-venta');
 };
 
+// Elimina una venta completa (ej. quedó duplicada porque se confirmó dos veces).
+// Devuelve el stock y borra el registro entero, para que no quede plata ni
+// ganancia de esa venta "flotando" en caja o en los reportes.
+window.eliminarVenta=async function(id){
+  const v=S.ventas.find(x=>x._id===id);
+  if(!v)return;
+  if(v.esAbono||v.esPedido){toast('Esta venta viene de un abono o pedido — elimínala desde ahí',false);return;}
+  if(!confirm('¿Eliminar esta venta de '+fmt(v.total)+' por completo? Se devolverá el stock de sus productos y no volverá a aparecer en caja ni en los reportes.'))return;
+  for(const item of (v.items||[])){
+    const prod=S.productos.find(p=>p._id===item._id);
+    if(prod){
+      const qty=item.tipo==='granel'?(item.cantGranel||0):(item.qty||1);
+      prod.stock+=qty;
+      await guardarDoc('productos',prod._id,{stock:prod.stock});
+    }
+  }
+  await borrarDoc('ventas',id);
+  S.ventas=S.ventas.filter(x=>x._id!==id);
+  renderCierre();
+  renderDashboard();
+  toast('Venta eliminada y stock devuelto');
+};
+
 function renderEditarVentaItems(){
   const total=_editVentaItems.reduce((a,i)=>a+i.precio*(i.qty||1),0);
   document.getElementById('editar-venta-items').innerHTML=_editVentaItems.length
@@ -2215,7 +2315,19 @@ window.guardarEditarVenta=async function(){
 
   // Actualizar venta
   v.items=itemsNew; v.total=totalNew;
-  await guardarDoc('ventas',_editVentaId,{items:itemsNew,total:totalNew});
+  const updateData={items:itemsNew,total:totalNew};
+  // Si la venta es de pago dividido (mixto), el efectivo y la transferencia
+  // guardados por separado deben ajustarse a la misma proporción del nuevo
+  // total — si no, quedan con la plata original aunque quites productos.
+  if(v.pago==='mixto'){
+    const totalOriginal=(v.montoEfectivo||0)+(v.montoTransferencia||0);
+    const ratio=totalOriginal>0?(totalNew/totalOriginal):0;
+    v.montoEfectivo=Math.round((v.montoEfectivo||0)*ratio*100)/100;
+    v.montoTransferencia=Math.round((v.montoTransferencia||0)*ratio*100)/100;
+    updateData.montoEfectivo=v.montoEfectivo;
+    updateData.montoTransferencia=v.montoTransferencia;
+  }
+  await guardarDoc('ventas',_editVentaId,updateData);
   cerrarMo('mo-editar-venta');
   renderCierre();
   toast('Venta actualizada — nuevo total: '+fmt(totalNew));
@@ -2556,8 +2668,10 @@ window.abrirCierreMenorModal=function(){
     }
   }
   const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado');
-  const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0);
-  const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0);
+  const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0)
+    + vd.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoEfectivo||0),0);
+  const tr=vd.filter(v=>v.pago==='transferencia').reduce((a,v)=>a+v.total,0)
+    + vd.filter(v=>v.pago==='mixto').reduce((a,v)=>a+(v.montoTransferencia||0),0);
   const gastosDia=S.gastos.filter(g=>g.fecha===fecha&&(g.pago==='efectivo'||g.pago==='caja_menor'));
   const gastosEf=gastosDia.reduce((a,g)=>a+g.monto,0);
   const totalCobrado=ef+tr;
@@ -3083,11 +3197,20 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
           <div class="pay-toggle">
             <div class="po sel" id="po-efectivo" onclick="selPago('efectivo')">💵 Efectivo</div>
             <div class="po" id="po-transferencia" onclick="selPago('transferencia')">📲 Transfer.</div>
+            <div class="po" id="po-mixto" onclick="selPago('mixto')">🔀 Dividido</div>
             <div class="po" id="po-fiado" onclick="selPago('fiado')">📋 Fiado</div>
           </div>
           <div id="fiado-f" style="display:none">
             <div class="fg mt8"><label class="fl">Nombre cliente *</label><input class="fi" id="f-nom" placeholder="Nombre"></div>
             <div class="fg mt8"><label class="fl">Teléfono</label><input class="fi" id="f-tel" placeholder="Número"></div>
+          </div>
+          <div id="mixto-f" style="display:none;background:var(--purple-l);border-radius:var(--rs);padding:10px;margin-top:8px">
+            <div style="font-size:11px;font-weight:600;color:var(--purple);margin-bottom:6px">🔀 Pago dividido — el efectivo + la transferencia deben sumar el total</div>
+            <div class="form-row" style="margin-bottom:0">
+              <div class="fg"><label class="fl">💵 Efectivo ($)</label><input class="fi" id="v-mixto-ef" type="number" min="0" placeholder="0" oninput="calcMixto()"></div>
+              <div class="fg"><label class="fl">📲 Transferencia ($)</label><input class="fi" id="v-mixto-tr" type="number" min="0" placeholder="0" oninput="calcMixto()"></div>
+            </div>
+            <div id="v-mixto-result" style="margin-top:6px;font-size:12px"></div>
           </div>
           <div id="cliente-opcional-f" style="margin-top:6px">
             <div>
@@ -3283,7 +3406,9 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
     </div>
   </div>
   <div class="form-row">
-    <div class="fg"><label class="fl">Stock *</label><input class="fi" id="p-stock" type="number" min="0" placeholder="0"></div>
+    <div class="fg"><label class="fl">Stock *</label><input class="fi" id="p-stock" type="number" min="0" placeholder="0">
+      <div id="p-stock-nota" style="display:none;font-size:11px;color:var(--warn);margin-top:3px">🔒 Bloqueado al editar — usa el botón "+" en Inventario para ajustar el stock</div>
+    </div>
     <div class="fg"><label class="fl">Stock mínimo (alerta)</label><input class="fi" id="p-min" type="number" min="0" placeholder="5"></div>
   </div>
   <div class="ma"><button class="btn" onclick="cerrarMo('mo-prod')">Cancelar</button><button class="btn bp" onclick="guardarProd()">Guardar</button></div>
