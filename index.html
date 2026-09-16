@@ -241,6 +241,14 @@ function calcGananciaVenta(v){
   return g;
 }
 window.calcGananciaVenta=calcGananciaVenta;
+// El Saldo total de Caja Mayor NUNCA se guarda como número independiente —
+// siempre se recalcula como Efectivo + Transferencia, para que sea imposible
+// que los tres números se desincronicen entre sí.
+function sincronizarSaldoCajaMayor(){
+  if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
+  S.cajaMayor.saldo=Math.round(((S.cajaMayor.saldoEf||0)+(S.cajaMayor.saldoTr||0))*100)/100;
+}
+window.sincronizarSaldoCajaMayor=sincronizarSaldoCajaMayor;
 function fmtF(s){ return new Date(s+'T00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}); }
 window.fmt = fmt;
 window.fmtF = fmtF;
@@ -457,7 +465,7 @@ function renderInv() {
   const prods=S.productos.filter(p=>{
     const matchQ=!q||p.nombre.toLowerCase().includes(q)||(p.categoria||'').toLowerCase().includes(q)||(p.barcode||'').includes(q);
     return matchQ&&(!cat||p.categoria===cat);
-  });
+  }).sort((a,b)=>(a.nombre||'').localeCompare((b.nombre||''),'es',{sensitivity:'base'}));
   document.getElementById('inv-tbody').innerHTML=prods.length?prods.map(p=>`
     <tr class="${p.stock<=p.min?'low-stock':''}">
       <td><div style="font-weight:500">${p.nombre}</div>${p.precioMayor&&p.cantMinMayor?`<div style="font-size:11px;color:var(--purple)">Mayor x${p.cantMinMayor}: ${fmt(p.precioMayor)}</div>`:''}</td>
@@ -479,7 +487,7 @@ window.renderInv = renderInv;
 
 window.exportarInventarioExcel=function(){
   const rows=[['Nombre','Categoría','Tipo','Código de barras','Stock','Stock mínimo','Precio compra','Precio venta','Precio mayorista','Cant. mínima mayorista','Unidad']];
-  S.productos.forEach(p=>{
+  [...S.productos].sort((a,b)=>(a.nombre||'').localeCompare((b.nombre||''),'es',{sensitivity:'base'})).forEach(p=>{
     rows.push([p.nombre||'',p.categoria||'',p.tipo==='granel'?'Granel':'Unidad',p.barcode||p.codigo||'',p.stock||0,p.stockMin||0,p.compra||0,p.tipo==='granel'?(p.precioUnidad||0):(p.venta||0),p.mayorista||0,p.cantMayorista||0,p.unidad||'']);
   });
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -2407,12 +2415,25 @@ window.abrirModalGasto=function(){
 window.guardarGasto=async function(){
   const monto=parseFloat(document.getElementById('gasto-monto').value)||0;
   if(!monto){toast('Ingresa el monto del gasto',false);return;}
+  const pagoSel=document.getElementById('gasto-pago').value;
+  // Validar ANTES de guardar que la bolsa específica (efectivo o transferencia)
+  // de Caja Mayor tenga suficiente saldo — así nunca se resta más de lo que
+  // hay en esa bolsa, aunque el total combinado sí alcance.
+  if(pagoSel==='caja_mayor_ef'||pagoSel==='caja_mayor_tr'){
+    if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
+    const esCmEf=pagoSel==='caja_mayor_ef';
+    const disponible=esCmEf?(S.cajaMayor.saldoEf||0):(S.cajaMayor.saldoTr||0);
+    if(monto>disponible){
+      toast('No hay suficiente '+(esCmEf?'efectivo':'transferencia')+' en Caja Mayor (disponible: '+fmt(disponible)+')',false);
+      return;
+    }
+  }
   const provId=document.getElementById('gasto-proveedor').value;
   const prov=S.proveedores.find(p=>p._id===provId);
   const data={tipo:document.getElementById('gasto-tipo').value,
     fecha:document.getElementById('gasto-fecha').value||hoy(),
     descripcion:document.getElementById('gasto-desc').value.trim(),
-    monto,pago:document.getElementById('gasto-pago').value,
+    monto,pago:pagoSel,
     proveedorId:provId||'',proveedorNombre:prov?prov.nombre:''};
   const id=await agregarDoc('gastos',data);
   S.gastos.push({_id:id,...data});
@@ -2423,9 +2444,9 @@ window.guardarGasto=async function(){
   if(data.pago==='caja_mayor_ef'||data.pago==='caja_mayor_tr'){
     if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
     const esCmEf=data.pago==='caja_mayor_ef';
-    S.cajaMayor.saldo=Math.max(0,(S.cajaMayor.saldo||0)-monto);
     if(esCmEf) S.cajaMayor.saldoEf=Math.max(0,(S.cajaMayor.saldoEf||0)-monto);
     else S.cajaMayor.saldoTr=Math.max(0,(S.cajaMayor.saldoTr||0)-monto);
+    sincronizarSaldoCajaMayor();
     S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
       {fecha:hoy(),hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
        tipo:'gasto',desc:(data.descripcion||TIPOS_GASTO[data.tipo]||data.tipo),monto:-monto,
@@ -2442,9 +2463,10 @@ window.eliminarGasto=async function(id){
   // Si era de caja mayor, devolver saldo Y eliminar el movimiento original
   if(g.pago==='caja_mayor_ef'||g.pago==='caja_mayor_tr'||g.pago==='caja_mayor'||g.pago==='Caja Mayor'){
     if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
-    S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+g.monto;
     if(g.pago==='caja_mayor_ef') S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+g.monto;
     else if(g.pago==='caja_mayor_tr') S.cajaMayor.saldoTr=(S.cajaMayor.saldoTr||0)+g.monto;
+    else S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+g.monto; // gasto viejo sin ef/tr — se devuelve como efectivo
+    sincronizarSaldoCajaMayor();
     const desc=g.descripcion||g.desc||'';
     const movs=S.cajaMayor.movimientos||[];
     const idx=movs.findIndex(m=>m.tipo==='gasto'&&m.monto===-g.monto&&(m.desc===desc||m.desc===(g.tipo||'')));
@@ -2606,8 +2628,8 @@ function renderCajaMayor(){
   const entradasMes=movFiltrados.filter(m=>m.monto>0).reduce((a,m)=>a+m.monto,0);
   const salidasMes=Math.abs(movFiltrados.filter(m=>m.monto<0).reduce((a,m)=>a+m.monto,0));
   const nombreMes=(mes)=>{if(!mes)return'';const[a,ms]=mes.split('-');const n=new Date(parseInt(a),parseInt(ms)-1,1).toLocaleDateString('es-CO',{month:'long',year:'numeric'});return n.charAt(0).toUpperCase()+n.slice(1);};
-  const _alertaSinClasif = saldoSinClasif>0
-    ? '<div style="background:var(--warn-l);border:1px solid var(--warn);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><span style="font-weight:600;color:var(--warn)">&#9888; Tienes '+fmt(saldoSinClasif)+' sin clasificar</span><div style="font-size:12px;color:var(--t2);margin-top:2px">Este saldo estaba en Caja Mayor antes de separar efectivo/transferencia</div></div><button class="btn" onclick="clasificarSaldoAnterior()" style="background:var(--warn);color:#fff;border-color:var(--warn)">Pasar todo a Efectivo</button></div>'
+  const _alertaSinClasif = Math.abs(saldoSinClasif)>=1
+    ? '<div style="background:var(--warn-l);border:1px solid var(--warn);border-radius:var(--rs);padding:12px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><span style="font-weight:600;color:var(--warn)">&#9888; El Saldo total no cuadra con Efectivo+Transferencia — diferencia de '+fmt(Math.abs(saldoSinClasif))+'</span><div style="font-size:12px;color:var(--t2);margin-top:2px">Puede venir de antes de separar efectivo/transferencia, o de cierres antiguos con el error ya corregido de "queda en caja menor"</div></div><button class="btn" onclick="clasificarSaldoAnterior()" style="background:var(--warn);color:#fff;border-color:var(--warn)">Corregir efectivo</button></div>'
     : '';
   document.getElementById('cajaMayor-content').innerHTML= _alertaSinClasif + `
     <div class="stats-grid" style="margin-bottom:16px">
@@ -2661,15 +2683,26 @@ function renderCajaMayor(){
 
 window.renderCajaMayor=renderCajaMayor;
 
+// Corrige la diferencia entre el Saldo total y la suma de Efectivo+Transferencia,
+// en cualquiera de las dos direcciones:
+// - Si el total es MAYOR (quedó plata sin clasificar de antes de separar ef/tr),
+//   la diferencia se suma al efectivo.
+// - Si Efectivo+Transferencia es MAYOR que el total (por el error histórico al
+//   dejar "queda en caja menor", que restaba del total pero no del efectivo),
+//   la diferencia se resta del efectivo, que es de donde salió el descuadre.
 window.clasificarSaldoAnterior=async function(){
   const sinClasif=(S.cajaMayor.saldo||0)-((S.cajaMayor.saldoEf||0)+(S.cajaMayor.saldoTr||0));
-  if(sinClasif<=0){toast('No hay saldo sin clasificar',false);return;}
-  if(!confirm('¿Pasar '+fmt(sinClasif)+' al saldo de efectivo de Caja Mayor?'))return;
-  S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+sinClasif;
+  if(Math.abs(sinClasif)<1){toast('No hay diferencia que corregir',false);return;}
+  const accion = sinClasif>0
+    ? '¿Pasar '+fmt(sinClasif)+' al saldo de efectivo de Caja Mayor?'
+    : '¿Restar '+fmt(Math.abs(sinClasif))+' del saldo de efectivo de Caja Mayor para que cuadre con el total?';
+  if(!confirm(accion))return;
+  S.cajaMayor.saldoEf=Math.max(0,(S.cajaMayor.saldoEf||0)+sinClasif);
+  sincronizarSaldoCajaMayor();
   await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   renderCajaMayor();
   renderDashboard();
-  toast('✓ '+fmt(sinClasif)+' clasificados como efectivo en Caja Mayor');
+  toast('✓ Efectivo ajustado — el total ya cuadra con Efectivo+Transferencia');
 };
 
 window.abrirCierreMenorModal=function(){
@@ -2728,41 +2761,47 @@ window.abrirCierreMenorModal=function(){
   abrirMo('mo-cierre-menor');
 };
 
+// "Lo que queda en caja menor" es plata física en efectivo (la transferencia
+// ya está en el banco, no se puede dejar en el cajón). Por eso solo se resta
+// del efectivo — la transferencia siempre sube completa a Caja Mayor.
 window.calcTransferenciaCajaMayor=function(){
-  const saldoCaja=window._cierreMenorSaldo||0;
+  const ef=window._cierreMenorEf||0;
+  const tr=window._cierreMenorTr||0;
   const base=window._cierreMenorBase||0;
   const queda=parseFloat(document.getElementById('cm-monto-queda').value)||0;
   const r=document.getElementById('cm-transferencia-result');
   if(queda<0){r.innerHTML='<span style="color:var(--danger)">⚠ Ingresa un valor positivo</span>';return;}
-  const pasa=Math.max(0,saldoCaja-queda);
-  const quedaTotal=queda+(base);
-  if(queda>saldoCaja){
-    r.innerHTML=`→ <strong style="color:var(--navy)">$0</strong> pasan a Caja Mayor${base>0?' <span style="color:var(--t3);font-size:11px">· base anterior '+fmt(base)+' se mantiene</span>':''}`;
-  } else {
-    r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor${base>0?' <span style="color:var(--t3);font-size:11px">· nueva base en caja: '+fmt(quedaTotal)+'</span>':''}`;
-  }
+  if(queda>ef){r.innerHTML='<span style="color:var(--danger)">⚠ No puedes dejar más de lo que hay en efectivo hoy ('+fmt(ef)+')</span>';return;}
+  const pasaEf=Math.max(0,ef-queda);
+  const pasa=pasaEf+tr;
+  r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor (💵 ${fmt(pasaEf)} + 📲 ${fmt(tr)}) <span style="color:var(--t3);font-size:11px">· base para mañana: ${fmt(queda)}</span>`;
 };
 
 window.confirmarCierreMenor=async function(){
-  const saldoCaja=window._cierreMenorSaldo||0;
+  const ef=window._cierreMenorEf||0;
+  const tr=window._cierreMenorTr||0;
   const queda=parseFloat(document.getElementById('cm-monto-queda').value);
   if(isNaN(queda)||queda<0){toast('Ingresa cuánto queda en caja menor',false);return;}
-  if(queda>saldoCaja){toast('El monto supera el saldo de hoy ('+fmt(saldoCaja)+')',false);return;}
-  const pasa=saldoCaja-queda;
-  const pasaEf=window._cierreMenorEf||0;
-  const pasaTr=window._cierreMenorTr||0;
+  if(queda>ef){toast('No puedes dejar más de lo que hay en efectivo hoy ('+fmt(ef)+')',false);return;}
+  const pasaEf=Math.max(0,ef-queda);
+  const pasaTr=tr;
+  const pasa=pasaEf+pasaTr;
   const desc=document.getElementById('cm-desc').value.trim()||'Cierre caja menor';
   if(!S.cajaMayor) S.cajaMayor={saldo:0,saldoEf:0,saldoTr:0,movimientos:[]};
-  S.cajaMayor.saldo=(S.cajaMayor.saldo||0)+pasa;
   S.cajaMayor.saldoEf=(S.cajaMayor.saldoEf||0)+pasaEf;
   S.cajaMayor.saldoTr=(S.cajaMayor.saldoTr||0)+pasaTr;
+  sincronizarSaldoCajaMayor();
   const _fechaCierre = document.getElementById('caja-fecha').value || hoy();
   S.cajaMayor.movimientos=[...(S.cajaMayor.movimientos||[]),
     {fecha:_fechaCierre,hora:new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
      tipo:'cierre',desc,monto:pasa,ef:pasaEf,tr:pasaTr,quedaEnMenor:queda}];
   await setDoc(doc(db,'negocios',uidActivo(),'config','cajaMayor'),S.cajaMayor,{merge:true});
   // Guardar saldo base para el día siguiente
-  const nuevoBase = queda + (window._cierreMenorBase||0);
+  // El saldo base para el día siguiente es SIEMPRE lo que se acaba de dejar en
+  // caja menor (queda) — no se suma a la base anterior, porque esa base física
+  // ya se contó dentro de "efectivo hoy" (o ya se había ido a Caja Mayor en un
+  // cierre previo). Sumarla de nuevo la inflaba en cada cierre.
+  const nuevoBase = queda;
   S.saldoBaseCaja = nuevoBase;
   await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:nuevoBase,fecha:hoy()},{merge:true});
   // Calcular y guardar ganancia del dia en Firebase
@@ -2795,8 +2834,7 @@ window.confirmarCierreMenor=async function(){
   } catch(e){ console.log('Error guardando ganancia:', e); }
   cerrarMo('mo-cierre-menor');
   renderDashboard();
-  const baseMsg=(window._cierreMenorBase||0)>0?' (incluye base anterior '+fmt(window._cierreMenorBase)+')':'';
-  toast('✓ Cierre registrado — '+fmt(pasa)+' a Caja Mayor · Base en caja: '+fmt(nuevoBase)+baseMsg);
+  toast('✓ Cierre registrado — '+fmt(pasa)+' a Caja Mayor · Base para mañana: '+fmt(nuevoBase));
 };
 
 // ══════════════════════════════════════════
@@ -3626,9 +3664,9 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
 <div class="mo" id="mo-cierre-menor"><div class="md" style="width:440px">
   <div class="mt2">🏦 Cierre de Caja Menor</div>
   <div id="cierre-menor-resumen" style="margin-bottom:14px"></div>
-  <div class="alert ai" style="margin-bottom:12px">El excedente pasará a <strong>Caja Mayor</strong>. Define cuánto queda en caja menor para el día siguiente.</div>
+  <div class="alert ai" style="margin-bottom:12px">El excedente pasará a <strong>Caja Mayor</strong>. Define cuánto <strong>efectivo</strong> queda en caja menor para el día siguiente (la transferencia siempre sube completa, porque ya está en el banco).</div>
   <div class="fg" style="margin-bottom:11px">
-    <label class="fl">💵 ¿Cuánto queda en Caja Menor? ($)</label>
+    <label class="fl">💵 ¿Cuánto efectivo queda en Caja Menor? ($)</label>
     <input class="fi" id="cm-monto-queda" type="number" min="0" placeholder="Ej: 50000" oninput="calcTransferenciaCajaMayor()">
     <div id="cm-transferencia-result" style="margin-top:8px;font-size:13px;font-weight:600;color:var(--a-d)"></div>
   </div>
