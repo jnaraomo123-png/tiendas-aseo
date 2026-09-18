@@ -1147,6 +1147,8 @@ window.imprimirVentaHistorial=(id)=>{const v=S.ventas.find(x=>x._id===id);if(v)m
 //  CIERRE CAJA
 // ══════════════════════════════════════════
 function renderCierre(){
+  const bcActual=document.getElementById('base-caja-actual');
+  if(bcActual) bcActual.textContent=fmt(S.saldoBaseCaja||0);
   const fecha=document.getElementById('caja-fecha').value||hoy();
   const vd=S.ventas.filter(v=>v.fecha===fecha&&v.pago!=='fiado').sort((a,b)=>(a.hora||'00:00').localeCompare(b.hora||'00:00'));
   const ef=vd.filter(v=>v.pago==='efectivo').reduce((a,v)=>a+v.total,0)
@@ -1229,6 +1231,20 @@ function renderCierre(){
       </div>
     </div>`;}
 window.renderCierre=renderCierre;
+
+// Fija la base de caja menor directamente (ej. para registrar por primera vez
+// una plata que ya existía físicamente, sin tener que pasar por un cierre).
+// No mueve nada de Caja Mayor — solo actualiza el número de referencia.
+window.corregirBaseCaja=async function(){
+  const val=parseFloat(document.getElementById('base-caja-input').value);
+  if(isNaN(val)||val<0){toast('Ingresa un valor válido',false);return;}
+  S.saldoBaseCaja=val;
+  await setDoc(doc(db,'negocios',uidActivo(),'config','saldoBase'),{monto:val,fecha:hoy()},{merge:true});
+  document.getElementById('base-caja-input').value='';
+  renderCierre();
+  renderDashboard();
+  toast('✓ Base de caja menor fijada en '+fmt(val));
+};
 
 window.exportarCierre = function() {
   const fecha=document.getElementById('caja-fecha').value||hoy();
@@ -2724,10 +2740,12 @@ window.abrirCierreMenorModal=function(){
   const totalCobrado=ef+tr;
   const efFinal=Math.max(0,ef-gastosEf);
   const cajaFinal=efFinal+tr;
+  const baseAnterior=S.saldoBaseCaja||0;
   const cmEf=S.cajaMayor&&S.cajaMayor.saldoEf||0;
   const cmTr=S.cajaMayor&&S.cajaMayor.saldoTr||0;
   document.getElementById('cierre-menor-resumen').innerHTML=`
     <div style="background:var(--s2);border-radius:var(--rs);padding:12px;font-size:13px">
+      ${baseAnterior>0?`<div style="background:var(--navy-l);border-radius:var(--rs);padding:8px 10px;margin-bottom:10px;font-size:12px;color:var(--navy)">💰 Ya tenías <strong>${fmt(baseAnterior)}</strong> de base en caja menor — solo se descuenta de Caja Mayor lo que dejes <strong>de más</strong> sobre eso.</div>`:''}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
         <div style="background:var(--navy-l);border-radius:var(--rs);padding:9px;text-align:center">
           <div style="font-size:10px;color:var(--navy);font-weight:600;margin-bottom:3px">💵 EFECTIVO HOY</div>
@@ -2743,8 +2761,8 @@ window.abrirCierreMenorModal=function(){
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;padding:6px 0;font-weight:700;font-size:14px;border-top:2px solid var(--border)">
-        <span>💰 Total pasa a Caja Mayor</span>
-        <span class="mono" style="color:var(--a-d)">${fmt(cajaFinal)}</span>
+        <span>💰 Máximo que podría pasar a Caja Mayor (si no dejas nada)</span>
+        <span class="mono" style="color:var(--a-d)">${fmt(cajaFinal+baseAnterior)}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;font-size:11px;color:var(--t3)">
         <div>🏦 Caja Mayor efectivo actual: <strong>${fmt(cmEf)}</strong></div>
@@ -2754,25 +2772,28 @@ window.abrirCierreMenorModal=function(){
   window._cierreMenorEf=efFinal;
   window._cierreMenorTr=tr;
   window._cierreMenorSaldo=cajaFinal;
-  window._cierreMenorBase=S.saldoBaseCaja||0;
+  window._cierreMenorBase=baseAnterior;
   document.getElementById('cm-monto-queda').value='';
   document.getElementById('cm-transferencia-result').textContent='';
   document.getElementById('cm-desc').value='Cierre '+fmtF(fecha);
   abrirMo('mo-cierre-menor');
 };
 
-// "Lo que queda en caja menor" es plata física en efectivo (la transferencia
-// ya está en el banco, no se puede dejar en el cajón). Por eso solo se resta
-// del efectivo — la transferencia siempre sube completa a Caja Mayor.
+// "Lo que queda en caja menor" es la plata física en efectivo que va a haber
+// en el cajón MAÑANA (no solo lo del día de hoy). El efectivo disponible ahora
+// mismo en el cajón es el de hoy + la base que ya había. Solo lo que sobre de
+// ahí sube a Caja Mayor — así, si dejas la misma base de siempre, no se resta
+// nada extra del día.
 window.calcTransferenciaCajaMayor=function(){
   const ef=window._cierreMenorEf||0;
   const tr=window._cierreMenorTr||0;
   const base=window._cierreMenorBase||0;
+  const efDisponible=ef+base;
   const queda=parseFloat(document.getElementById('cm-monto-queda').value)||0;
   const r=document.getElementById('cm-transferencia-result');
   if(queda<0){r.innerHTML='<span style="color:var(--danger)">⚠ Ingresa un valor positivo</span>';return;}
-  if(queda>ef){r.innerHTML='<span style="color:var(--danger)">⚠ No puedes dejar más de lo que hay en efectivo hoy ('+fmt(ef)+')</span>';return;}
-  const pasaEf=Math.max(0,ef-queda);
+  if(queda>efDisponible){r.innerHTML='<span style="color:var(--danger)">⚠ No puedes dejar más de lo que hay en efectivo ahora mismo en caja ('+fmt(efDisponible)+' = hoy + base)</span>';return;}
+  const pasaEf=Math.max(0,efDisponible-queda);
   const pasa=pasaEf+tr;
   r.innerHTML=`→ <strong style="color:var(--a-d)">${fmt(pasa)}</strong> pasan a Caja Mayor (💵 ${fmt(pasaEf)} + 📲 ${fmt(tr)}) <span style="color:var(--t3);font-size:11px">· base para mañana: ${fmt(queda)}</span>`;
 };
@@ -2780,10 +2801,12 @@ window.calcTransferenciaCajaMayor=function(){
 window.confirmarCierreMenor=async function(){
   const ef=window._cierreMenorEf||0;
   const tr=window._cierreMenorTr||0;
+  const base=window._cierreMenorBase||0;
+  const efDisponible=ef+base;
   const queda=parseFloat(document.getElementById('cm-monto-queda').value);
   if(isNaN(queda)||queda<0){toast('Ingresa cuánto queda en caja menor',false);return;}
-  if(queda>ef){toast('No puedes dejar más de lo que hay en efectivo hoy ('+fmt(ef)+')',false);return;}
-  const pasaEf=Math.max(0,ef-queda);
+  if(queda>efDisponible){toast('No puedes dejar más de lo que hay en efectivo ahora mismo en caja ('+fmt(efDisponible)+')',false);return;}
+  const pasaEf=Math.max(0,efDisponible-queda);
   const pasaTr=tr;
   const pasa=pasaEf+pasaTr;
   const desc=document.getElementById('cm-desc').value.trim()||'Cierre caja menor';
@@ -3295,6 +3318,17 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--s2)}.low-stock 
           <input type="date" class="fi" id="caja-fecha" onchange="renderCierre()" style="width:160px">
           <button class="btn bp" onclick="abrirCierreMenorModal()">🏦 Cierre → Caja Mayor</button>
           <button class="btn" onclick="exportarCierre()">⬇ TXT</button>
+        </div>
+      </div>
+      <div id="base-caja-box" style="background:var(--navy-l);border:1px solid var(--navy);border-radius:var(--r);padding:12px 16px;margin:0 16px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:600;color:var(--navy);font-size:13px">💰 Base fija en caja menor</div>
+          <div style="font-size:11px;color:var(--t3)">Plata que se deja siempre en el cajón (no entra a Caja Mayor)</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="base-caja-actual" style="font-size:18px;font-weight:700;color:var(--navy)">$0</span>
+          <input class="fi" id="base-caja-input" type="number" min="0" placeholder="Nuevo valor" style="width:130px">
+          <button class="btn bp bsm" onclick="corregirBaseCaja()">Corregir base</button>
         </div>
       </div>
       <div id="cierre-content"></div>
